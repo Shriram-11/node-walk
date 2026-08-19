@@ -502,6 +502,55 @@ def export_graph(
         print(text)
 
 
+@app.command(name="help")
+def show_help() -> None:
+    """Show this help message and exit."""
+    console.print(
+        Panel(
+            "[bold white]CodeGraph[/bold white] - Local Semantic Code Intelligence for Python\n"
+            "[dim]Lightweight, local-first, SQLite-backed indexer and query engine.[/dim]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="bold cyan")
+    table.add_column("Command", style="bold yellow", width=18)
+    table.add_column("Description", style="white")
+
+    table.add_section()
+    table.add_row("[bold white]Project Setup[/bold white]", "")
+    table.add_row("index <path>", "Analyze and index a Python codebase.")
+
+    table.add_section()
+    table.add_row("[bold white]Code Navigation[/bold white]", "")
+    table.add_row("find <query>", "Search for symbols by name or qualified name.")
+    table.add_row("definition <name>", "Show definition metadata for a symbol.")
+    table.add_row("source <name>", "Display the exact source code block of a symbol.")
+
+    table.add_section()
+    table.add_row("[bold white]Graph Relationships[/bold white]", "")
+    table.add_row("callers <name>", "Find all functions/methods calling this symbol.")
+    table.add_row("callees <name>", "Find all functions/methods called by this symbol.")
+    table.add_row("refs <name>", "Find all references/usages of this symbol.")
+    table.add_row("implementations <name>", "Find implementations or subclasses of a class/ABC.")
+    table.add_row("imports <name>", "Find all imports of a module/symbol.")
+
+    table.add_section()
+    table.add_row("[bold white]Advanced Traversals[/bold white]", "")
+    table.add_row("trace <name>", "Trace outgoing dependencies (call/import graph paths).")
+    table.add_row("blast-radius <name>", "Show transitive incoming impact paths.")
+
+    table.add_section()
+    table.add_row("[bold white]Utilities[/bold white]", "")
+    table.add_row("stats", "Show database statistics (file, symbol, edge counts).")
+    table.add_row("export", "Export the entire semantic graph as JSON.")
+
+    console.print(table)
+    console.print("\n[dim]To see options for any command, run: [bold]codegraph <command> --help[/bold][/dim]")
+
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
