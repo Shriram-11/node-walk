@@ -236,33 +236,15 @@ class QueryEngine:
         """
         conn = self._store._conn  # type: ignore[attr-defined]
 
-        type_filter = ""
-        params: list[object] = [start_id, depth]
-
-        if rel_types:
-            placeholders = ",".join("?" * len(rel_types))
-            type_filter = f"AND r.type IN ({placeholders})"
-            params = [start_id] + rel_types + [depth] + rel_types  # duplicated for both CTEs
-
         if direction == "out":
-            edge_join = f"JOIN relationships r ON r.source_id = walk.symbol_id {type_filter}"
+            edge_join = "JOIN relationships r ON r.source_id = walk.symbol_id"
             next_sym = "r.target_id"
         elif direction == "in":
-            edge_join = f"JOIN relationships r ON r.target_id = walk.symbol_id {type_filter}"
+            edge_join = "JOIN relationships r ON r.target_id = walk.symbol_id"
             next_sym = "r.source_id"
         else:  # both
-            edge_join = f"""
-                JOIN relationships r ON (
-                    r.source_id = walk.symbol_id OR r.target_id = walk.symbol_id
-                ) {type_filter}
-            """
+            edge_join = "JOIN relationships r ON (r.source_id = walk.symbol_id OR r.target_id = walk.symbol_id)"
             next_sym = "CASE WHEN r.source_id = walk.symbol_id THEN r.target_id ELSE r.source_id END"
-
-        if rel_types:
-            # params layout: start_id, *rel_types, depth, *rel_types (for both anchor + recursive)
-            params = [start_id] + rel_types + [depth] + rel_types
-        else:
-            params = [start_id, depth]
 
         sql = f"""
         WITH RECURSIVE walk(symbol_id, depth, rel_type) AS (
@@ -276,7 +258,8 @@ class QueryEngine:
         )
         SELECT DISTINCT symbol_id, depth, rel_type FROM walk ORDER BY depth
         """
-        # Simplify params for now (rel_type filter in CTE is complex with UNION; handle via post-filter)
+        # Execute with just start_id + depth; filter by rel_type in Python
+        # (avoids the complexity of duplicating ? params across the UNION)
         rows = conn.execute(sql, [start_id, depth]).fetchall()
         if rel_types:
             rows = [r for r in rows if r["rel_type"] is None or r["rel_type"] in rel_types]
