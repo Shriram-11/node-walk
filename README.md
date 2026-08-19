@@ -8,32 +8,44 @@ Local-first · Lightweight · Python first · SQLite backed
 
 ## Quickstart
 
+### 1. Install & Setup
 ```bash
-# Install
+# Clone and setup the environment
+git clone <repo-url> CodeGraph
+cd CodeGraph
+python -m venv .venv
+.venv\Scripts\activate     # Windows (or source .venv/bin/activate on Unix)
 pip install -e ".[dev]"
+```
 
-# Index a repository
-codegraph index ./path/to/repo
+### 2. Indexing and Querying
+All CLI commands discover the graph database by searching for a `.codegraph/` directory in the current directory or walking up parent directories.
 
+**To index any directory:**
+```bash
+# Activate CodeGraph venv, then go to the repository you want to index
+cd /path/to/your/project
+codegraph index .
+```
+
+**Run queries within that project's directory:**
+```bash
 # Find a symbol
 codegraph find UserService
 
 # See its definition
 codegraph definition UserService
 
-# Who calls it?
+# Find callers (shows interactive picker if multiple symbols match)
 codegraph callers UserService.create_user
 
-# What does it call?
-codegraph callees UserService.create_user
-
-# Trace dependencies 5 hops deep
+# Trace outgoing dependencies (out-edges)
 codegraph trace UserService.create_user --depth 5
 
-# Blast radius — what breaks if this changes?
+# Blast radius (in-edges - what breaks if this changes?)
 codegraph blast-radius UserService.create_user
 
-# See exact source
+# View source code of a symbol
 codegraph source UserService.create_user
 
 # Graph statistics
@@ -42,6 +54,7 @@ codegraph stats
 # Export to JSON
 codegraph export --output graph.json
 ```
+
 
 ## Architecture
 
