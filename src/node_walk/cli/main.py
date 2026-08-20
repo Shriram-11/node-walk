@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Literal, Optional
 
 import typer
 from rich.console import Console
@@ -21,7 +21,8 @@ from rich.syntax import Syntax
 
 from node_walk.indexer import Indexer
 from node_walk.ir.enums import RelationshipType, SymbolKind
-from node_walk.query.engine import QueryEngine, SymbolMatch, WalkResult
+from node_walk.query.engine import QueryEngine, SymbolMatch, WalkResult, TraceResult
+from node_walk.query.tree_formatter import format_ascii_tree, format_dot, format_mermaid
 from node_walk.storage.sqlite_store import SQLiteGraphStore
 
 # ---------------------------------------------------------------------------
@@ -29,7 +30,7 @@ from node_walk.storage.sqlite_store import SQLiteGraphStore
 # ---------------------------------------------------------------------------
 
 app = typer.Typer(
-    name="node_walk",
+    name="node-walk",
     help="Semantic code intelligence — navigate your codebase like a graph.",
     add_completion=False,
     rich_markup_mode="rich",
@@ -65,7 +66,7 @@ def _get_store(repo_path: Path | None = None) -> SQLiteGraphStore:
     if db is None:
         err_console.print(
             "[red]No .node_walk/graph.db found.[/red] "
-            "Run [bold]node_walk index <path>[/bold] first."
+            "Run [bold]node-walk index <path>[/bold] first."
         )
         raise typer.Exit(1)
     return SQLiteGraphStore(db)
@@ -88,17 +89,27 @@ def _print_symbols_table(
     table.add_column("Name", style="bold white")
     table.add_column("File", style="dim")
     table.add_column("Lines", style="dim", width=10)
+    has_fuzzy = any(m.score < 0.90 for m in matches)
+    if has_fuzzy:
+        table.add_column("Score", style="magenta", width=8)
+
     _store = store or _get_store()
     for m in matches:
         sym = m.symbol
         file_info = _store.get_file(sym.file_id)
         file_label = Path(file_info.path).name if file_info else "?"
-        table.add_row(
+        row_args = [
             sym.kind.value,
             sym.qualified_name,
             file_label,
             f"{sym.start_line}-{sym.end_line}",
-        )
+        ]
+        if has_fuzzy:
+            score_str = f"{m.score:.2f}"
+            if m.score < 0.80:
+                score_str = f"[yellow]{score_str} (fuzzy)[/yellow]"
+            row_args.append(score_str)
+        table.add_row(*row_args)
     console.print(table)
 
 
@@ -121,10 +132,38 @@ def _print_walk_results(results: list[WalkResult], title: str) -> None:
     console.print(table)
 
 
+def _output_graph(result: TraceResult, fmt: str, title: str, output: Path | None = None) -> None:
+    fmt_lower = fmt.lower().strip()
+    if fmt_lower == "tree":
+        tree_text = format_ascii_tree(result)
+        if output:
+            output.write_text(tree_text, encoding="utf-8")
+            console.print(f"[green]Saved tree to[/green] {output}")
+        else:
+            console.print(Panel(tree_text, title=title, border_style="cyan"))
+    elif fmt_lower == "dot":
+        dot_text = format_dot(result)
+        if output:
+            output.write_text(dot_text, encoding="utf-8")
+            console.print(f"[green]Saved DOT graph to[/green] {output}")
+        else:
+            print(dot_text)
+    elif fmt_lower == "mermaid":
+        mermaid_text = format_mermaid(result)
+        if output:
+            output.write_text(mermaid_text, encoding="utf-8")
+            console.print(f"[green]Saved Mermaid diagram to[/green] {output}")
+        else:
+            print(mermaid_text)
+    else:  # default table
+        _print_walk_results(result.nodes, title=title)
+
+
 def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
     """
     Resolve a user-provided symbol name/qname to a symbol_id.
-    If multiple matches, prints a picker and prompts the user.
+    If unambiguous (exact match or clear top candidate), returns it directly.
+    If multiple close matches, prints a picker and prompts the user.
     Returns the chosen symbol_id, or None on failure.
     """
     matches = engine.find_symbol(query)
@@ -135,11 +174,16 @@ def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
     if len(matches) == 1:
         return matches[0].symbol.id
 
+    # If the top match is high confidence and clearly separated from the rest, resolve directly
+    if matches[0].score >= 0.85 and (matches[0].score - matches[1].score >= 0.10):
+        return matches[0].symbol.id
+
     # Multiple matches — let the user pick
     console.print(f"\n[bold]Multiple matches for[/bold] [yellow]{query!r}[/yellow]:\n")
     for i, m in enumerate(matches[:10], 1):
         sym = m.symbol
-        console.print(f"  [cyan]{i}[/cyan]  {sym.kind.value:12} {sym.qualified_name}")
+        fuzzy_note = " [dim yellow](fuzzy)[/dim yellow]" if m.score < 0.80 else ""
+        console.print(f"  [cyan]{i}[/cyan]  {sym.kind.value:12} {sym.qualified_name}{fuzzy_note}")
 
     choice = typer.prompt("\nPick a number", default="1")
     try:
@@ -167,13 +211,11 @@ def index(
 
     store = SQLiteGraphStore(db_path)
 
-    files_done = 0
-
     def progress(file_path: str, current: int, total: int) -> None:
         rel = Path(file_path).relative_to(root) if root in Path(file_path).parents else Path(file_path).name
         console.print(f"  [dim][{current}/{total}][/dim] {rel}", end="\r")
 
-    console.print(f"\n[bold cyan]CodeGraph[/bold cyan] — indexing [bold]{root}[/bold]\n")
+    console.print(f"\n[bold cyan]node-walk[/bold cyan] — indexing [bold]{root}[/bold]\n")
 
     indexer = Indexer(store, progress_callback=progress)
     stats = indexer.index(root, clear=clear)
@@ -377,28 +419,68 @@ def imports(
 def trace(
     symbol: Annotated[str, typer.Argument(help="Starting symbol name.")],
     depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 5,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: table, tree, dot, mermaid.")] = "table",
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
 ) -> None:
     """Trace outgoing CALLS and IMPORTS from a symbol (shows what it depends on)."""
     engine = _get_engine()
     sym_id = _resolve_symbol(engine, symbol)
     if not sym_id:
         raise typer.Exit(1)
-    results = engine.trace(sym_id, depth=depth)
-    _print_walk_results(results, title=f"Trace from {symbol!r} (depth={depth})")
+
+    result = engine.trace_graph(sym_id, depth=depth)
+    if not result or not result.nodes:
+        console.print("[dim]No outgoing relationships found.[/dim]")
+        return
+
+    _output_graph(result, fmt, title=f"Trace from {symbol!r} (depth={depth})", output=output)
 
 
 @app.command(name="blast-radius")
 def blast_radius(
     symbol: Annotated[str, typer.Argument(help="Symbol name to assess impact for.")],
     depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 3,
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: table, tree, dot, mermaid.")] = "table",
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
 ) -> None:
     """Find everything that could be affected if this symbol changes."""
     engine = _get_engine()
     sym_id = _resolve_symbol(engine, symbol)
     if not sym_id:
         raise typer.Exit(1)
-    results = engine.blast_radius(sym_id, depth=depth)
-    _print_walk_results(results, title=f"Blast radius of {symbol!r} (depth={depth})")
+
+    result = engine.blast_radius_graph(sym_id, depth=depth)
+    if not result or not result.nodes:
+        console.print("[dim]No dependent relationships found.[/dim]")
+        return
+
+    _output_graph(result, fmt, title=f"Blast radius of {symbol!r} (depth={depth})", output=output)
+
+
+@app.command()
+def graph(
+    symbol: Annotated[str, typer.Argument(help="Root symbol name or qualified name.")],
+    depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 3,
+    direction: Annotated[str, typer.Option("--direction", help="Traversal direction: out, in, both.")] = "out",
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: tree, dot, mermaid, table.")] = "tree",
+    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
+) -> None:
+    """Visualize dependencies around a symbol as an ASCII tree, DOT graph, or Mermaid diagram."""
+    engine = _get_engine()
+    sym_id = _resolve_symbol(engine, symbol)
+    if not sym_id:
+        raise typer.Exit(1)
+
+    dir_val: Any = direction.lower()
+    if dir_val not in ("out", "in", "both"):
+        dir_val = "out"
+
+    result = engine.walk_graph(sym_id, direction=dir_val, depth=depth)
+    if not result or not result.nodes:
+        console.print("[dim]No graph connections found for this symbol.[/dim]")
+        return
+
+    _output_graph(result, fmt, title=f"Graph: {symbol!r} ({direction}, depth={depth})", output=output)
 
 
 @app.command()
@@ -507,7 +589,7 @@ def show_help() -> None:
     """Show this help message and exit."""
     console.print(
         Panel(
-            "[bold white]CodeGraph[/bold white] - Local Semantic Code Intelligence for Python\n"
+            "[bold white]node-walk[/bold white] - Local Semantic Code Intelligence for Python\n"
             "[dim]Lightweight, local-first, SQLite-backed indexer and query engine.[/dim]",
             border_style="cyan",
             expand=False,
@@ -515,7 +597,7 @@ def show_help() -> None:
     )
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="bold cyan")
-    table.add_column("Command", style="bold yellow", width=18)
+    table.add_column("Command", style="bold yellow", width=22)
     table.add_column("Description", style="white")
 
     table.add_section()
@@ -524,7 +606,7 @@ def show_help() -> None:
 
     table.add_section()
     table.add_row("[bold white]Code Navigation[/bold white]", "")
-    table.add_row("find <query>", "Search for symbols by name or qualified name.")
+    table.add_row("find <query>", "Search symbols by name, dotted path, or fuzzy typo.")
     table.add_row("definition <name>", "Show definition metadata for a symbol.")
     table.add_row("source <name>", "Display the exact source code block of a symbol.")
 
@@ -537,9 +619,10 @@ def show_help() -> None:
     table.add_row("imports <name>", "Find all imports of a module/symbol.")
 
     table.add_section()
-    table.add_row("[bold white]Advanced Traversals[/bold white]", "")
-    table.add_row("trace <name>", "Trace outgoing dependencies (call/import graph paths).")
-    table.add_row("blast-radius <name>", "Show transitive incoming impact paths.")
+    table.add_row("[bold white]Advanced Traversals & Visualizations[/bold white]", "")
+    table.add_row("trace <name>", "Trace outgoing dependencies (tree, table, dot, mermaid).")
+    table.add_row("blast-radius <name>", "Show transitive impact paths (tree, table, dot, mermaid).")
+    table.add_row("graph <name>", "Render ASCII tree, Graphviz DOT, or Mermaid diagrams.")
 
     table.add_section()
     table.add_row("[bold white]Utilities[/bold white]", "")
@@ -547,7 +630,7 @@ def show_help() -> None:
     table.add_row("export", "Export the entire semantic graph as JSON.")
 
     console.print(table)
-    console.print("\n[dim]To see options for any command, run: [bold]node_walk <command> --help[/bold][/dim]")
+    console.print("\n[dim]To see options for any command, run: [bold]node-walk <command> --help[/bold][/dim]")
 
 
 
@@ -558,3 +641,4 @@ def show_help() -> None:
 
 if __name__ == "__main__":
     app()
+

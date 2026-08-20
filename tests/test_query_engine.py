@@ -42,6 +42,24 @@ class TestFindSymbol:
         results = engine.find_symbol("create")
         assert any("create" in m.symbol.name for m in results)
 
+    def test_finds_dotted_path(self, engine):
+        results = engine.find_symbol("UserService.create_user")
+        assert results
+        assert results[0].symbol.name == "create_user"
+        assert results[0].score >= 0.90
+
+    def test_finds_fuzzy_typo(self, engine):
+        # Typo in simple name
+        results = engine.find_symbol("creat_user")
+        assert results
+        assert any(m.symbol.name == "create_user" for m in results)
+
+    def test_finds_fuzzy_dotted_path(self, engine):
+        # Typo in class name of dotted path
+        results = engine.find_symbol("UserServce.create_user")
+        assert results
+        assert any(m.symbol.name == "create_user" for m in results)
+
     def test_returns_empty_for_nonexistent(self, engine):
         results = engine.find_symbol("__absolutely_not_a_symbol__")
         assert results == []
@@ -103,7 +121,7 @@ class TestSourceRetrieval:
         assert any("def" in line for line in src.lines)
 
 
-class TestWalk:
+class TestWalkAndGraph:
     def test_walk_returns_results(self, engine):
         matches = engine.find_symbol("UserService")
         if matches:
@@ -116,6 +134,50 @@ class TestWalk:
             results = engine.walk(matches[0].symbol.id, depth=1)
             for r in results:
                 assert r.depth <= 1
+
+    def test_trace_graph_structure(self, engine):
+        matches = engine.find_symbol("bootstrap")
+        if matches:
+            res = engine.trace_graph(matches[0].symbol.id, depth=3)
+            assert res is not None
+            assert res.root.id == matches[0].symbol.id
+            assert isinstance(res.nodes, list)
+            assert isinstance(res.edges, list)
+
+    def test_blast_radius_graph_structure(self, engine):
+        matches = engine.find_symbol("send_email")
+        if matches:
+            res = engine.blast_radius_graph(matches[0].symbol.id, depth=3)
+            assert res is not None
+            assert res.root.id == matches[0].symbol.id
+            assert res.direction == "in"
+
+
+class TestFormatters:
+    def test_format_ascii_tree(self, engine):
+        from node_walk.query.tree_formatter import format_ascii_tree
+        matches = engine.find_symbol("bootstrap")
+        if matches:
+            res = engine.trace_graph(matches[0].symbol.id, depth=3)
+            tree_output = format_ascii_tree(res)
+            assert "bootstrap" in tree_output
+
+    def test_format_dot(self, engine):
+        from node_walk.query.tree_formatter import format_dot
+        matches = engine.find_symbol("bootstrap")
+        if matches:
+            res = engine.trace_graph(matches[0].symbol.id, depth=3)
+            dot_output = format_dot(res)
+            assert "digraph CodeGraph" in dot_output
+            assert "->" in dot_output or len(res.edges) == 0
+
+    def test_format_mermaid(self, engine):
+        from node_walk.query.tree_formatter import format_mermaid
+        matches = engine.find_symbol("bootstrap")
+        if matches:
+            res = engine.trace_graph(matches[0].symbol.id, depth=3)
+            mermaid_output = format_mermaid(res)
+            assert "graph LR" in mermaid_output
 
 
 class TestStats:
