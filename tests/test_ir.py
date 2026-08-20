@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from codegraph.ir.models import (
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Language,

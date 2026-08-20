@@ -13,7 +13,7 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from codegraph.ir.models import AnalysisResult, FileInfo, Language
+from node_walk.ir.models import AnalysisResult, FileInfo, Language
 
 # ---------------------------------------------------------------------------
 # File extension → language mapping
@@ -42,7 +42,7 @@ _SKIP_DIRS: frozenset[str] = frozenset(
         ".env",
         "dist",
         "build",
-        ".codegraph",
+        ".node_walk",
         ".eggs",
         "*.egg-info",
     }

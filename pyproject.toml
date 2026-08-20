@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "codegraph"
+name = "node-walk"
 version = "0.1.0"
 description = "Semantic code intelligence — local-first graph of your codebase for humans and LLMs"
 readme = "README.md"
@@ -34,14 +34,18 @@ dev = [
 ]
 
 [project.scripts]
-codegraph = "codegraph.cli.main:app"
+node-walk = "node_walk.cli.main:app"
+nodewalk = "node_walk.cli.main:app"
+node_walk = "node_walk.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/codegraph"]
+packages = ["src/node_walk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+

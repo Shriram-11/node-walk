@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from codegraph.analysis.python_analyzer import PythonAnalyzer
-from codegraph.ir.models import (
+from node_walk.analysis.python_analyzer import PythonAnalyzer
+from node_walk.ir.models import (
     FileInfo,
     Language,
     RelationshipType,

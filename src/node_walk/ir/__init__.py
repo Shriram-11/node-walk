@@ -1,22 +1,22 @@
 """
-codegraph.ir — Code Intermediate Representation.
+node_walk.ir — Code Intermediate Representation.
 
 Re-exports everything from enums and models so consumers can do:
 
-    from codegraph.ir import Symbol, SymbolKind, Relationship
+    from node_walk.ir import Symbol, SymbolKind, Relationship
     # or
-    from codegraph.ir.models import Symbol
+    from node_walk.ir.models import Symbol
     # or
-    from codegraph.ir.enums import SymbolKind
+    from node_walk.ir.enums import SymbolKind
 """
 
-from codegraph.ir.enums import (
+from node_walk.ir.enums import (
     Language,
     RelationshipType,
     ResolutionStatus,
     SymbolKind,
 )
-from codegraph.ir.models import (
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Relationship,

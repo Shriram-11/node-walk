@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from codegraph.ir.models import (
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Language,
@@ -15,7 +15,7 @@ from codegraph.ir.models import (
     Symbol,
     SymbolKind,
 )
-from codegraph.storage.repository import SQLiteGraphStore
+from node_walk.storage.repository import SQLiteGraphStore
 
 
 @pytest.fixture

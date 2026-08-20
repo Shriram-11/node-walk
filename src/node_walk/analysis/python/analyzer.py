@@ -11,10 +11,10 @@ All symbol extraction and relationship logic lives in visitor.py.
 
 from __future__ import annotations
 
-from codegraph.analysis.base import LanguageAnalyzer
-from codegraph.analysis.python.visitor import SymbolCollector, _PARSER
-from codegraph.ir.enums import Language
-from codegraph.ir.models import AnalysisResult, FileInfo
+from node_walk.analysis.base import LanguageAnalyzer
+from node_walk.analysis.python.visitor import SymbolCollector, _PARSER
+from node_walk.ir.enums import Language
+from node_walk.ir.models import AnalysisResult, FileInfo
 
 
 class PythonAnalyzer(LanguageAnalyzer):

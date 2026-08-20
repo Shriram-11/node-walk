@@ -1,7 +1,7 @@
 """
 CodeGraph CLI — Typer-based command-line interface.
 
-All commands discover the graph database from the nearest .codegraph/
+All commands discover the graph database from the nearest .node_walk/
 directory (walking up from cwd). The `index` command creates it.
 """
 
@@ -19,17 +19,17 @@ from rich import box
 from rich.text import Text
 from rich.syntax import Syntax
 
-from codegraph.indexer import Indexer
-from codegraph.ir.enums import RelationshipType, SymbolKind
-from codegraph.query.engine import QueryEngine, SymbolMatch, WalkResult
-from codegraph.storage.sqlite_store import SQLiteGraphStore
+from node_walk.indexer import Indexer
+from node_walk.ir.enums import RelationshipType, SymbolKind
+from node_walk.query.engine import QueryEngine, SymbolMatch, WalkResult
+from node_walk.storage.sqlite_store import SQLiteGraphStore
 
 # ---------------------------------------------------------------------------
 # App and console setup
 # ---------------------------------------------------------------------------
 
 app = typer.Typer(
-    name="codegraph",
+    name="node_walk",
     help="Semantic code intelligence — navigate your codebase like a graph.",
     add_completion=False,
     rich_markup_mode="rich",
@@ -43,11 +43,11 @@ err_console = Console(stderr=True)
 # ---------------------------------------------------------------------------
 
 _DB_FILENAME = "graph.db"
-_CG_DIR = ".codegraph"
+_CG_DIR = ".node_walk"
 
 
 def _find_db(start: Path | None = None) -> Path | None:
-    """Walk up from *start* (or cwd) looking for a .codegraph/graph.db file."""
+    """Walk up from *start* (or cwd) looking for a .node_walk/graph.db file."""
     current = (start or Path.cwd()).resolve()
     while True:
         candidate = current / _CG_DIR / _DB_FILENAME
@@ -64,8 +64,8 @@ def _get_store(repo_path: Path | None = None) -> SQLiteGraphStore:
     db = _find_db(repo_path)
     if db is None:
         err_console.print(
-            "[red]No .codegraph/graph.db found.[/red] "
-            "Run [bold]codegraph index <path>[/bold] first."
+            "[red]No .node_walk/graph.db found.[/red] "
+            "Run [bold]node_walk index <path>[/bold] first."
         )
         raise typer.Exit(1)
     return SQLiteGraphStore(db)
@@ -547,7 +547,7 @@ def show_help() -> None:
     table.add_row("export", "Export the entire semantic graph as JSON.")
 
     console.print(table)
-    console.print("\n[dim]To see options for any command, run: [bold]codegraph <command> --help[/bold][/dim]")
+    console.print("\n[dim]To see options for any command, run: [bold]node_walk <command> --help[/bold][/dim]")
 
 
 

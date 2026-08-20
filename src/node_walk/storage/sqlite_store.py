@@ -2,7 +2,7 @@
 SQLite implementation of GraphStore.
 
 All SQL is contained here. The rest of the codebase only depends on
-the abstract GraphStore interface from codegraph.storage.base.
+the abstract GraphStore interface from node_walk.storage.base.
 """
 
 from __future__ import annotations
@@ -11,16 +11,16 @@ import json
 import sqlite3
 from pathlib import Path
 
-from codegraph.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
-from codegraph.ir.models import (
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Relationship,
     SourceLocation,
     Symbol,
 )
-from codegraph.storage import schema as _schema
-from codegraph.storage.base import GraphStore
+from node_walk.storage import schema as _schema
+from node_walk.storage.base import GraphStore
 
 
 class SQLiteGraphStore(GraphStore):
@@ -29,7 +29,7 @@ class SQLiteGraphStore(GraphStore):
 
     Usage::
 
-        store = SQLiteGraphStore(".codegraph/graph.db")
+        store = SQLiteGraphStore(".node_walk/graph.db")
         store.store_results(analysis_results)
     """
 

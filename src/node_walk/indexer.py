@@ -2,10 +2,10 @@
 Indexer — orchestrates file discovery, analysis, storage, and cross-file resolution.
 
 Usage:
-    from codegraph.indexer import Indexer
-    from codegraph.storage.repository import SQLiteGraphStore
+    from node_walk.indexer import Indexer
+    from node_walk.storage.repository import SQLiteGraphStore
 
-    store = SQLiteGraphStore(".codegraph/graph.db")
+    store = SQLiteGraphStore(".node_walk/graph.db")
     indexer = Indexer(store)
     indexer.index("./my_repo")
 """
@@ -15,11 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from codegraph.analysis.base import FileDiscovery, LanguageAnalyzer
-from codegraph.analysis.python import PythonAnalyzer
-from codegraph.ir.models import AnalysisResult
-from codegraph.ir.enums import Language, RelationshipType, ResolutionStatus
-from codegraph.storage.base import GraphStore
+from node_walk.analysis.base import FileDiscovery, LanguageAnalyzer
+from node_walk.analysis.python import PythonAnalyzer
+from node_walk.ir.models import AnalysisResult
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus
+from node_walk.storage.base import GraphStore
 
 
 class Indexer:

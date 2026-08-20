@@ -82,7 +82,7 @@ _CREATE_INDEXES = [
 # ---------------------------------------------------------------------------
 
 _CREATE_META = """
-CREATE TABLE IF NOT EXISTS codegraph_meta (
+CREATE TABLE IF NOT EXISTS node_walk_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
@@ -113,7 +113,7 @@ def initialize(conn: sqlite3.Connection) -> None:
         conn.execute(idx_sql)
 
     conn.execute(
-        "INSERT OR IGNORE INTO codegraph_meta(key, value) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO node_walk_meta(key, value) VALUES (?, ?)",
         ("schema_version", _SCHEMA_VERSION),
     )
     conn.commit()
@@ -123,7 +123,7 @@ def get_schema_version(conn: sqlite3.Connection) -> str | None:
     """Return the stored schema version, or None if the meta table is missing/empty."""
     try:
         row = conn.execute(
-            "SELECT value FROM codegraph_meta WHERE key = 'schema_version'"
+            "SELECT value FROM node_walk_meta WHERE key = 'schema_version'"
         ).fetchone()
         return row[0] if row else None
     except sqlite3.OperationalError:

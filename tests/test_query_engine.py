@@ -3,9 +3,9 @@
 import pytest
 from pathlib import Path
 
-from codegraph.analysis.python_analyzer import PythonAnalyzer
-from codegraph.indexer import Indexer
-from codegraph.ir.models import (
+from node_walk.analysis.python_analyzer import PythonAnalyzer
+from node_walk.indexer import Indexer
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Language,
@@ -15,8 +15,8 @@ from codegraph.ir.models import (
     Symbol,
     SymbolKind,
 )
-from codegraph.query.engine import QueryEngine
-from codegraph.storage.repository import SQLiteGraphStore
+from node_walk.query.engine import QueryEngine
+from node_walk.storage.repository import SQLiteGraphStore
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "simple_project"
 

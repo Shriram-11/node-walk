@@ -7,7 +7,7 @@ on AST logic, not bookkeeping.
 
 from __future__ import annotations
 
-from codegraph.ir.models import Symbol
+from node_walk.ir.models import Symbol
 
 
 class Scope:

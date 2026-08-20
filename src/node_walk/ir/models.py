@@ -4,7 +4,7 @@ Code IR data models — Pydantic v2 models for the semantic graph.
 All models are immutable (frozen=True). Language analyzers produce
 AnalysisResult objects; the storage and query layers consume them.
 
-Enums live in codegraph.ir.enums — import from there if you only
+Enums live in node_walk.ir.enums — import from there if you only
 need enum values without the Pydantic models.
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from codegraph.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
 
 
 class FileInfo(BaseModel):

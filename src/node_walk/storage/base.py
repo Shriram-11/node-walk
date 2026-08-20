@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from codegraph.ir.models import AnalysisResult, FileInfo, Relationship, Symbol
-from codegraph.ir.enums import RelationshipType, ResolutionStatus
+from node_walk.ir.models import AnalysisResult, FileInfo, Relationship, Symbol
+from node_walk.ir.enums import RelationshipType, ResolutionStatus
 
 
 class GraphStore(ABC):

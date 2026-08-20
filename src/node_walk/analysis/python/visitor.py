@@ -25,9 +25,9 @@ from typing import Any
 import tree_sitter_python as tspython
 from tree_sitter import Language as TSLanguage, Node, Parser
 
-from codegraph.analysis.python.scope import Scope
-from codegraph.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
-from codegraph.ir.models import (
+from node_walk.analysis.python.scope import Scope
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Relationship,

@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from codegraph.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
-from codegraph.ir.models import Relationship, Symbol, SourceLocation
-from codegraph.storage.base import GraphStore
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.models import Relationship, Symbol, SourceLocation
+from node_walk.storage.base import GraphStore
 
 
 # ---------------------------------------------------------------------------
