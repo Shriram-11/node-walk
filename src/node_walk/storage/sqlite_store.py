@@ -121,6 +121,12 @@ class SQLiteGraphStore(GraphStore):
         ).fetchall()
         return [self._row_to_symbol(r) for r in rows]
 
+    def get_all_symbol_names(self) -> list[tuple[str, str, str]]:
+        rows = self._conn.execute(
+            "SELECT id, name, qualified_name FROM symbols ORDER BY qualified_name"
+        ).fetchall()
+        return [(r["id"], r["name"], r["qualified_name"]) for r in rows]
+
     def get_relationships_from(
         self, symbol_id: str, rel_type: RelationshipType | None = None
     ) -> list[Relationship]:

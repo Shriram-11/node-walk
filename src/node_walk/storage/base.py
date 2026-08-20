@@ -61,6 +61,11 @@ class GraphStore(ABC):
     def get_all_symbols(self) -> list[Symbol]: ...
 
     @abstractmethod
+    def get_all_symbol_names(self) -> list[tuple[str, str, str]]:
+        """Return (id, name, qualified_name) tuples for all symbols."""
+        ...
+
+    @abstractmethod
     def get_relationships_from(
         self, symbol_id: str, rel_type: RelationshipType | None = None
     ) -> list[Relationship]: ...
