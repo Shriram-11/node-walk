@@ -123,3 +123,9 @@ pytest tests/ -v
 ## Graph Storage & Lifecycle
 
 The generated graph is stored in `.node_walk/graph.db` inside your indexed repository. It is disposable and can be re-indexed at any time with `node-walk index .`.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](file:///c:/Users/nshri/Github/CodeGraph/CHANGELOG.md) for full release history and notes.
