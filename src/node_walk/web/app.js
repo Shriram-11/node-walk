@@ -22,10 +22,22 @@ const KIND_COLORS = {
   FUNCTION:  '#66BB6A',
   METHOD:    '#FFA726',
   MODULE:    '#AB47BC',
-  FILE:      '#AB47BC',
+  FILE:      '#818CF8',
   CONSTANT:  '#FFEE58',
   VARIABLE:  '#BDBDBD',
   FIELD:     '#BDBDBD',
+};
+
+const KIND_GLYPHS = {
+  CLASS:     'C',
+  INTERFACE: 'I',
+  FUNCTION:  'ƒ',
+  METHOD:    'm',
+  MODULE:    'mod',
+  FILE:      'f',
+  CONSTANT:  'c',
+  VARIABLE:  'v',
+  FIELD:     '·',
 };
 
 const REL_COLORS = {
@@ -34,7 +46,7 @@ const REL_COLORS = {
   EXTENDS:    '#66BB6A',
   IMPLEMENTS: '#26A69A',
   REFERENCES: '#9E9E9E',
-  CONTAINS:   '#E0E0E0',
+  CONTAINS:   '#6B7280',
 };
 
 const KIND_SHAPES = {
@@ -52,18 +64,21 @@ const KIND_SHAPES = {
 const ALL_KINDS = Object.keys(KIND_COLORS);
 const ALL_RELS  = Object.keys(REL_COLORS);
 
-// Relationships hidden by default (can be toggled on via filter)
-const HIDDEN_BY_DEFAULT_RELS = new Set(['CONTAINS']);
+// Hide structural/noise nodes & edges by default so __init__.py and raw files don't clutter the graph
+const HIDDEN_BY_DEFAULT_KINDS = new Set(['FILE', 'CONSTANT', 'VARIABLE', 'FIELD']);
+const HIDDEN_BY_DEFAULT_RELS  = new Set(['CONTAINS']);
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 let cy;                          // Cytoscape instance
+let rawGraphData = { nodes: [], edges: [] }; // Full dataset from API
 let selectedNodeId = null;       // currently selected node id
 let hiddenNodes = new Set();     // manually hidden node ids
 let focusedNodeId = null;        // node being "focused" (subtree highlight)
+let isFullGraphMode = false;     // whether all nodes are loaded onto canvas
 
-const activeKinds = new Set(ALL_KINDS);
+const activeKinds = new Set(ALL_KINDS.filter(k => !HIDDEN_BY_DEFAULT_KINDS.has(k)));
 const activeRels  = new Set(ALL_RELS.filter(r => !HIDDEN_BY_DEFAULT_RELS.has(r)));
 
 // ---------------------------------------------------------------------------
@@ -98,9 +113,35 @@ const elDetailSrcWrap = document.getElementById('detail-source-wrap');
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Utility & Node Markings
+// ---------------------------------------------------------------------------
 function kindColor(kind) { return KIND_COLORS[kind] || '#6b7280'; }
 function relColor(rel)   { return REL_COLORS[rel]   || '#9E9E9E'; }
 function kindShape(kind) { return KIND_SHAPES[kind]  || 'ellipse'; }
+function kindGlyph(kind) { return KIND_GLYPHS[kind]  || '•'; }
+
+function getDisplayName(node) {
+  const name = node.name || '';
+  const qname = node.qualified_name || name;
+  const parts = qname.split('.');
+  if (node.kind === 'METHOD' || node.kind === 'FIELD') {
+    if (parts.length >= 2) {
+      return `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
+    }
+  } else if (node.kind === 'FUNCTION') {
+    if (parts.length >= 2 && ['handler', '__init__', 'main', 'run', 'execute', 'tool', 'TOOL'].includes(name.toLowerCase())) {
+      return `${parts[parts.length - 2]}.${parts[parts.length - 1]}`;
+    }
+  }
+  return name || qname;
+}
+
+function getNodeBadgeLabel(node) {
+  const glyph = kindGlyph(node.kind);
+  const name = getDisplayName(node);
+  return `[${glyph}] ${name}`;
+}
 
 function debounce(fn, ms) {
   let timer;
@@ -138,7 +179,6 @@ function hideTooltip() {
 function showTooltip(text, x, y) {
   elTooltip.textContent = text;
   elTooltip.hidden = false;
-  // Keep tooltip within viewport
   const tw = elTooltip.offsetWidth;
   const th = elTooltip.offsetHeight;
   elTooltip.style.left = Math.min(x + 12, window.innerWidth - tw - 8) + 'px';
@@ -171,19 +211,21 @@ function buildStylesheet() {
     {
       selector: 'node',
       style: {
-        'label': 'data(name)',
+        'label': 'data(badgeLabel)',
         'font-size': 11,
+        'font-weight': 600,
         'font-family': "'JetBrains Mono', monospace",
-        'color': '#e8eaf0',
+        'color': '#f1f5f9',
         'text-valign': 'bottom',
         'text-halign': 'center',
-        'text-margin-y': 4,
+        'text-margin-y': 5,
         'text-outline-color': '#0d0f14',
-        'text-outline-width': 2,
-        'width': 36,
-        'height': 36,
+        'text-outline-width': 3,
+        'text-outline-opacity': 0.95,
+        'width': 'data(sz)',
+        'height': 'data(sz)',
         'border-width': 2,
-        'border-color': 'rgba(255,255,255,0.12)',
+        'border-color': 'rgba(255,255,255,0.25)',
         'background-color': '#6b7280',
         'transition-property': 'opacity, border-color, border-width',
         'transition-duration': '150ms',
@@ -194,14 +236,14 @@ function buildStylesheet() {
       style: {
         'curve-style': 'bezier',
         'target-arrow-shape': 'triangle',
-        'arrow-scale': 1,
+        'arrow-scale': 0.85,
         'line-color':   '#9E9E9E',
         'target-arrow-color': '#9E9E9E',
-        'width': 1.5,
-        'label': 'data(type)',
+        'width': 1.4,
+        'label': '',
         'font-size': 9,
         'font-family': "'Inter', sans-serif",
-        'color': 'rgba(255,255,255,0.35)',
+        'color': 'rgba(255,255,255,0.65)',
         'text-rotation': 'autorotate',
         'text-margin-y': -6,
         'text-outline-color': '#0d0f14',
@@ -209,6 +251,10 @@ function buildStylesheet() {
         'transition-property': 'opacity',
         'transition-duration': '150ms',
       },
+    },
+    {
+      selector: 'edge.edge-hovered',
+      style: { 'label': 'data(type)', 'width': 2.5, 'z-index': 50 },
     },
     ...nodeStyles,
     ...edgeStyles,
@@ -219,6 +265,7 @@ function buildStylesheet() {
         'border-width': 3,
         'border-color': '#fff',
         'z-index': 999,
+        'label': 'data(badgeLabel)',
       },
     },
     // Neighbor highlight
@@ -226,7 +273,8 @@ function buildStylesheet() {
       selector: 'node.neighbor',
       style: {
         'border-width': 2,
-        'border-color': 'rgba(255,255,255,0.5)',
+        'border-color': 'rgba(255,255,255,0.7)',
+        'label': 'data(badgeLabel)',
       },
     },
     // Dimmed (focus mode)
@@ -255,7 +303,13 @@ function buildStylesheet() {
 function buildElements(nodes, edges) {
   const cyNodes = nodes.map(n => ({
     group: 'nodes',
-    data: { id: n.id, ...n },
+    data: {
+      id: n.id,
+      displayName: getDisplayName(n),
+      badgeLabel: getNodeBadgeLabel(n),
+      glyph: kindGlyph(n.kind),
+      ...n,
+    },
   }));
   const cyEdges = edges.map(e => ({
     group: 'edges',
@@ -265,13 +319,47 @@ function buildElements(nodes, edges) {
 }
 
 // ---------------------------------------------------------------------------
+// Subgraph & Seed Selection (Progressive Discovery)
+// ---------------------------------------------------------------------------
+function getCoreSeeds(nodes, edges) {
+  // Degree count per node
+  const degMap = new Map();
+  edges.forEach(e => {
+    degMap.set(e.source, (degMap.get(e.source) || 0) + 1);
+    degMap.set(e.target, (degMap.get(e.target) || 0) + 1);
+  });
+
+  // Filter out noise nodes (files, constants, fields)
+  const candidateNodes = nodes.filter(n => !HIDDEN_BY_DEFAULT_KINDS.has(n.kind));
+
+  // Score candidate nodes
+  const scored = candidateNodes.map(n => {
+    let score = (degMap.get(n.id) || 0);
+    if (n.kind === 'CLASS') score += 15;
+    if (n.kind === 'INTERFACE') score += 12;
+    if (n.kind === 'FUNCTION') score += 4;
+    return { node: n, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Take top core hubs (up to 12)
+  const topSeeds = scored.slice(0, 12).map(s => s.node);
+  const seedIds = new Set(topSeeds.map(s => s.id));
+
+  // Include edges connecting these seeds
+  const seedEdges = edges.filter(e => seedIds.has(e.source) && seedIds.has(e.target) && !HIDDEN_BY_DEFAULT_RELS.has(e.type));
+
+  return { seedNodes: topSeeds, seedEdges, allCandidates: scored.map(s => s.node) };
+}
+
+// ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 async function init() {
   setLoading(true);
-  let graphData;
   try {
-    graphData = await apiFetch('/api/graph');
+    rawGraphData = await apiFetch('/api/graph');
   } catch (err) {
     setLoading(false);
     elEmpty.hidden = false;
@@ -280,20 +368,39 @@ async function init() {
     return;
   }
 
-  if (!graphData.nodes || graphData.nodes.length === 0) {
+  if (!rawGraphData.nodes || rawGraphData.nodes.length === 0) {
     setLoading(false);
     elEmpty.hidden = false;
     elLoading.classList.add('hidden');
     return;
   }
 
-  const elements = buildElements(graphData.nodes, graphData.edges);
+  elEmpty.hidden = true;
+
+  // Progressive discovery: seed canvas with top core hubs
+  const { seedNodes, seedEdges, allCandidates } = getCoreSeeds(rawGraphData.nodes, rawGraphData.edges);
+  renderQuickSeeds(allCandidates.slice(0, 10));
+
+  const elements = buildElements(seedNodes, seedEdges);
 
   cy = cytoscape({
     container: document.getElementById('cy'),
     elements,
     style: buildStylesheet(),
-    layout: { name: 'cose', animate: true, randomize: true, nodeRepulsion: 8000, idealEdgeLength: 80, gravity: 0.4 },
+    layout: {
+      name: 'cose',
+      animate: true,
+      animationDuration: 600,
+      randomize: true,
+      nodeRepulsion: () => 14000,
+      idealEdgeLength: () => 110,
+      nodeOverlap: 20,
+      gravity: 0.5,
+      numIter: 2000,
+      coolingFactor: 0.95,
+      fit: true,
+      padding: 50,
+    },
     minZoom: 0.05,
     maxZoom: 4,
     wheelSensitivity: 0.3,
@@ -301,11 +408,42 @@ async function init() {
 
   cy.ready(() => {
     setLoading(false);
+    applyDegreeSizing();
     applyActiveFilters();
-    updateStatusBar();
     buildFilterUI();
     bindCyEvents();
+    cy.one('layoutstop', () => updateStatusBar());
+    applyZoomLabels();
   });
+}
+
+// ---------------------------------------------------------------------------
+// Degree-based node sizing
+// ---------------------------------------------------------------------------
+function applyDegreeSizing() {
+  if (!cy) return;
+  cy.batch(() => {
+    cy.nodes().forEach(n => {
+      const deg = n.degree(false);
+      const sz = Math.min(58, Math.max(26, 26 + Math.sqrt(deg) * 6));
+      n.data('sz', sz);
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive node label visibility based on zoom
+// ---------------------------------------------------------------------------
+const LABEL_ZOOM_THRESHOLD = 0.35;
+
+function applyZoomLabels() {
+  if (!cy) return;
+  const zoom = cy.zoom();
+  if (zoom >= LABEL_ZOOM_THRESHOLD) {
+    cy.nodes().not('.selected, .neighbor').style('label', 'data(badgeLabel)');
+  } else {
+    cy.nodes().not('.selected, .neighbor').style('label', '');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,29 +553,94 @@ function bindCyEvents() {
     showCtxMenu(x, y, node.id());
   });
 
-  // ── Hover → tooltip ────────────────────────────────────────────────────
+  // ── Hover on node → tooltip (also force-show label at any zoom) ─────────
   cy.on('mouseover', 'node', e => {
     const n = e.target;
-    const txt = `${n.data('kind')} · ${n.data('qualified_name')}`;
+    const callers = n.data('callers_count') != null ? ` · ${n.data('callers_count')} callers` : '';
+    const txt = `${n.data('kind')} · ${n.data('qualified_name')}${callers}`;
     const pos = e.originalEvent;
     showTooltip(txt, pos.clientX, pos.clientY);
+    // Force label visible on hover regardless of zoom
+    if (!n.hasClass('selected') && !n.hasClass('neighbor')) {
+      n.style('label', 'data(name)');
+    }
   });
-  cy.on('mouseout', 'node', hideTooltip);
+  cy.on('mouseout', 'node', e => {
+    hideTooltip();
+    // Restore zoom-based label policy
+    const n = e.target;
+    if (!n.hasClass('selected') && !n.hasClass('neighbor')) {
+      if (cy.zoom() < LABEL_ZOOM_THRESHOLD) n.style('label', '');
+    }
+  });
   cy.on('mousemove', 'node', e => {
     const pos = e.originalEvent;
     showTooltip(elTooltip.textContent, pos.clientX, pos.clientY);
   });
 
+  // ── Hover on edge → show label class + tooltip ──────────────────────────
   cy.on('mouseover', 'edge', e => {
     const ed = e.target;
-    const txt = `${ed.data('type')} · ${ed.source().data('name')} → ${ed.target().data('name')}`;
+    ed.addClass('edge-hovered');
+    const txt = `${ed.data('type')}  ${ed.source().data('name')} → ${ed.target().data('name')}`;
     const pos = e.originalEvent;
     showTooltip(txt, pos.clientX, pos.clientY);
   });
-  cy.on('mouseout', 'edge', hideTooltip);
+  cy.on('mouseout', 'edge', e => {
+    e.target.removeClass('edge-hovered');
+    hideTooltip();
+  });
+
+  // ── Zoom → adaptive labels ───────────────────────────────────────────────
+  cy.on('zoom', () => applyZoomLabels());
 
   // Hide tooltip on pan/zoom
   cy.on('pan zoom', hideTooltip);
+}
+
+// ---------------------------------------------------------------------------
+// Quick Seeds bar
+// ---------------------------------------------------------------------------
+function renderQuickSeeds(seeds) {
+  const elSeeds = document.getElementById('quick-seeds');
+  if (!elSeeds) return;
+  elSeeds.innerHTML = '<span class="seed-label">Explore seeds:</span>';
+
+  seeds.forEach(s => {
+    const chip = document.createElement('button');
+    chip.className = 'seed-chip';
+    chip.title = `Add ${s.qualified_name} to canvas`;
+    const glyph = kindGlyph(s.kind);
+    const dname = getDisplayName(s);
+    chip.innerHTML = `<span class="seed-glyph" style="background:${kindColor(s.kind)}">${glyph}</span> <span class="seed-text">${dname}</span>`;
+    chip.addEventListener('click', () => {
+      addSymbolSeed(s.id);
+    });
+    elSeeds.appendChild(chip);
+  });
+}
+
+async function addSymbolSeed(id) {
+  if (!cy) return;
+  let node = cy.getElementById(id);
+  if (!node.length) {
+    // Look up in rawGraphData
+    const sym = rawGraphData.nodes.find(n => n.id === id);
+    if (sym) {
+      cy.add(buildElements([sym], []));
+      applyDegreeSizing();
+      applyActiveFilters();
+      updateStatusBar();
+    }
+  }
+  // Automatically expand 1-hop neighbours for this seed
+  await expandNeighbors(id, 'both');
+  node = cy.getElementById(id);
+  if (node.length) {
+    cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.2) }, { duration: 400 });
+    selectNode(id);
+    showDetailPanel(id);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +653,7 @@ function selectNode(id) {
 
   selectedNodeId = id;
   const node = cy.getElementById(id);
+  if (!node.length) return;
   node.addClass('selected');
 
   // Highlight direct neighbours
@@ -479,7 +683,6 @@ function deselect() {
 // ---------------------------------------------------------------------------
 async function showDetailPanel(id) {
   elDetailPanel.hidden = false;
-  // Show a loading placeholder
   elDetailName.textContent = '…';
   elDetailKind.textContent = '';
 
@@ -487,8 +690,8 @@ async function showDetailPanel(id) {
     const data = await apiFetch(`/api/symbol/${encodeURIComponent(id)}`);
     const sym = data.symbol;
 
-    elDetailName.textContent = sym.name;
-    elDetailKind.textContent = sym.kind;
+    elDetailName.textContent = getDisplayName(sym);
+    elDetailKind.textContent = `${kindGlyph(sym.kind)} ${sym.kind}`;
     elDetailKind.style.color = kindColor(sym.kind);
     elDetailFile.textContent = sym.file_path ? sym.file_path.split(/[/\\]/).slice(-2).join('/') : '—';
     elDetailLines.textContent = `${sym.start_line}–${sym.end_line}`;
@@ -522,47 +725,66 @@ async function showDetailPanel(id) {
   }
 }
 
-// Button: expand from detail panel
+// Buttons in detail panel
 document.getElementById('btn-expand-node').addEventListener('click', () => {
-  if (selectedNodeId) expandNeighbors(selectedNodeId);
+  if (selectedNodeId) expandNeighbors(selectedNodeId, 'both');
 });
+
+const btnExpandCallers = document.getElementById('btn-expand-callers');
+if (btnExpandCallers) {
+  btnExpandCallers.addEventListener('click', () => {
+    if (selectedNodeId) expandNeighbors(selectedNodeId, 'in');
+  });
+}
+
+const btnExpandCallees = document.getElementById('btn-expand-callees');
+if (btnExpandCallees) {
+  btnExpandCallees.addEventListener('click', () => {
+    if (selectedNodeId) expandNeighbors(selectedNodeId, 'out');
+  });
+}
 
 document.getElementById('btn-close-detail').addEventListener('click', deselect);
 
 // ---------------------------------------------------------------------------
-// Expand neighbours (lazy)
+// Expand neighbours (lazy / progressive)
 // ---------------------------------------------------------------------------
-async function expandNeighbors(id) {
+async function expandNeighbors(id, direction = 'both') {
   try {
-    const data = await apiFetch(`/api/neighbors/${encodeURIComponent(id)}?direction=both`);
+    const data = await apiFetch(`/api/neighbors/${encodeURIComponent(id)}?direction=${direction}`);
     if (!data.nodes.length && !data.edges.length) return;
 
     const existingIds = new Set(cy.nodes().map(n => n.id()));
-    const newEls = [];
-
-    data.nodes.forEach(n => {
-      if (!existingIds.has(n.id)) {
-        newEls.push({ group: 'nodes', data: { id: n.id, ...n }, classes: 'new' });
-      }
-    });
+    const newNodes = data.nodes.filter(n => !existingIds.has(n.id) && !HIDDEN_BY_DEFAULT_KINDS.has(n.kind));
 
     const existingEdgeIds = new Set(cy.edges().map(e => e.id()));
-    data.edges.forEach(e => {
-      if (!existingEdgeIds.has(e.id)) {
-        newEls.push({ group: 'edges', data: { id: e.id, source: e.source, target: e.target, type: e.type, resolution: e.resolution } });
-      }
+    const newEdges = data.edges.filter(e => !existingEdgeIds.has(e.id) && !HIDDEN_BY_DEFAULT_RELS.has(e.type));
+
+    if (!newNodes.length && !newEdges.length) return;
+
+    const newEls = buildElements(newNodes, newEdges);
+    newEls.forEach(el => {
+      if (el.group === 'nodes') el.classes = 'new';
     });
 
-    if (!newEls.length) return;
-
     cy.add(newEls);
-    // Run a local layout around the expanded node only
-    cy.layout({ name: 'cose', animate: true, randomize: false, fit: false }).run();
+    applyDegreeSizing();
     applyActiveFilters();
-    updateStatusBar();
 
-    // Remove 'new' class after animation
-    setTimeout(() => cy.nodes('.new').removeClass('new'), 2000);
+    // Run localized physics layout to fit new nodes smoothly
+    cy.layout({
+      name: 'cose',
+      animate: true,
+      animationDuration: 500,
+      randomize: false,
+      fit: false,
+      nodeRepulsion: () => 12000,
+      idealEdgeLength: () => 90,
+      gravity: 0.5,
+    }).run();
+
+    updateStatusBar();
+    setTimeout(() => cy.nodes('.new').removeClass('new'), 1800);
   } catch (err) {
     console.error('expandNeighbors error:', err);
   }
@@ -586,7 +808,7 @@ function hideCtxMenu() {
 }
 
 document.getElementById('ctx-expand').addEventListener('click', () => {
-  if (ctxTargetId) expandNeighbors(ctxTargetId);
+  if (ctxTargetId) expandNeighbors(ctxTargetId, 'both');
   hideCtxMenu();
 });
 
@@ -648,17 +870,22 @@ function renderSearchResults(results) {
   elSearchRes.innerHTML = '';
   if (!results.length) { elSearchRes.hidden = true; return; }
 
-  results.slice(0, 10).forEach((r, i) => {
+  // Exclude raw file symbols from instant search suggestions unless explicitly requested
+  const filtered = results.filter(r => !HIDDEN_BY_DEFAULT_KINDS.has(r.kind));
+  const listToRender = filtered.length ? filtered : results;
+
+  listToRender.slice(0, 10).forEach((r, i) => {
     const div = document.createElement('div');
     div.className = 'search-result-item';
     div.setAttribute('role', 'option');
     div.setAttribute('id', `sr-${i}`);
+    const glyph = kindGlyph(r.kind);
     div.innerHTML = `
-      <span class="search-result-kind" style="color:${kindColor(r.kind)}">${r.kind}</span>
+      <span class="search-result-kind" style="background:${kindColor(r.kind)};color:#0d0f14;font-weight:bold">${glyph}</span>
       <span class="search-result-name">${r.qualified_name}</span>
       <span class="search-result-score">${(r.score * 100).toFixed(0)}%</span>`;
     div.addEventListener('click', () => {
-      navigateToSymbol(r.id);
+      addSymbolSeed(r.id);
       closeSearch();
     });
     elSearchRes.appendChild(div);
@@ -671,13 +898,35 @@ function closeSearch() {
   elSearchRes.hidden = true;
 }
 
-function navigateToSymbol(id) {
+// ---------------------------------------------------------------------------
+// Canvas management: Clear & Full Graph toggles
+// ---------------------------------------------------------------------------
+function clearCanvas() {
   if (!cy) return;
-  const node = cy.getElementById(id);
-  if (!node.length) return;
-  cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1.5) }, { duration: 400 });
-  selectNode(id);
-  showDetailPanel(id);
+  deselect();
+  cy.elements().remove();
+  updateStatusBar();
+}
+
+function loadFullGraph() {
+  if (!cy || !rawGraphData.nodes.length) return;
+  deselect();
+  const elements = buildElements(rawGraphData.nodes, rawGraphData.edges);
+  cy.elements().remove();
+  cy.add(elements);
+  applyDegreeSizing();
+  applyActiveFilters();
+  cy.layout({
+    name: 'cose',
+    animate: true,
+    animationDuration: 800,
+    randomize: true,
+    nodeRepulsion: () => 14000,
+    idealEdgeLength: () => 110,
+    nodeOverlap: 20,
+    gravity: 0.5,
+  }).run();
+  updateStatusBar();
 }
 
 // ---------------------------------------------------------------------------
@@ -688,8 +937,27 @@ document.getElementById('btn-fit').addEventListener('click', () => {
 });
 
 document.getElementById('btn-layout').addEventListener('click', () => {
-  cy && cy.layout({ name: 'cose', animate: true }).run();
+  if (!cy) return;
+  cy.layout({
+    name: 'cose',
+    animate: true,
+    randomize: false,
+    nodeRepulsion: () => 14000,
+    idealEdgeLength: () => 110,
+    nodeOverlap: 20,
+    gravity: 0.5,
+  }).run();
 });
+
+const btnClear = document.getElementById('btn-clear');
+if (btnClear) {
+  btnClear.addEventListener('click', clearCanvas);
+}
+
+const btnFullGraph = document.getElementById('btn-full-graph');
+if (btnFullGraph) {
+  btnFullGraph.addEventListener('click', loadFullGraph);
+}
 
 document.getElementById('btn-filter-toggle').addEventListener('click', e => {
   const btn = e.currentTarget;

@@ -38,9 +38,21 @@
     </div>
 
     <div id="topbar-actions">
-      <button id="btn-fit" class="icon-btn" title="Fit graph to viewport" aria-label="Fit graph">⊞</button>
-      <button id="btn-filter-toggle" class="icon-btn" title="Toggle filter panel" aria-label="Toggle filters" aria-expanded="false">⊟</button>
-      <button id="btn-layout" class="icon-btn" title="Re-run layout" aria-label="Re-run layout">↻</button>
+      <button id="btn-fit" class="icon-btn" title="Fit graph to viewport" aria-label="Fit graph">⊞ Fit</button>
+      <button id="btn-layout" class="icon-btn" title="Re-run physics layout" aria-label="Re-run layout">↻ Layout</button>
+      <button id="btn-clear" class="icon-btn" title="Clear canvas to explore a new path" aria-label="Clear canvas">⊘ Clear</button>
+      <button id="btn-full-graph" class="icon-btn" title="Load full graph" aria-label="Load full graph">⬡ Full Graph</button>
+      <button id="btn-filter-toggle" class="icon-btn" title="Toggle filter panel" aria-label="Toggle filters" aria-expanded="false">⊟ Filters</button>
+    </div>
+
+    <!-- Legend strip -->
+    <div id="legend" aria-label="Node type legend">
+      <span class="legend-item"><span class="legend-dot" style="background:#4FC3F7"></span><strong>C</strong> Class</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#FFA726"></span><strong>m</strong> Method</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#66BB6A"></span><strong>ƒ</strong> Function</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#7E57C2;border-radius:2px"></span><strong>I</strong> Interface</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#AB47BC;border-radius:2px"></span><strong>mod</strong> Module</span>
+      <span class="legend-item"><span class="legend-dot" style="background:#FFEE58;border-radius:2px"></span><strong>c</strong> Constant</span>
     </div>
   </header>
 
@@ -72,13 +84,21 @@
 
     <!-- Cytoscape graph canvas -->
     <div id="cy-wrap">
+      <!-- Quick Seeds exploration bar -->
+      <nav id="quick-seeds" aria-label="Quick start exploration seeds"></nav>
+
       <div id="cy" role="img" aria-label="Interactive code dependency graph"></div>
       <div id="cy-loading" aria-live="polite" aria-label="Loading graph">
         <div class="spinner" aria-hidden="true"></div>
         <p>Loading graph…</p>
       </div>
       <div id="cy-empty" hidden>
-        <p>No symbols found. Run <code>node-walk index &lt;path&gt;</code> first.</p>
+        <div class="empty-state">
+          <div class="empty-icon">⬡</div>
+          <h2 class="empty-title">No symbols indexed yet</h2>
+          <p class="empty-desc">Run the following command in your project directory, then refresh:</p>
+          <pre class="empty-cmd"><code>node-walk index .</code></pre>
+        </div>
       </div>
     </div>
 
@@ -122,9 +142,17 @@
       </div>
 
       <div id="detail-actions">
-        <button id="btn-expand-node" class="btn-primary" title="Fetch 1-hop neighbours and add to graph">
-          Expand neighbours
+        <button id="btn-expand-node" class="btn-primary" title="Fetch 1-hop callers and callees">
+          ⊕ Expand all neighbours
         </button>
+        <div class="detail-actions-row">
+          <button id="btn-expand-callers" class="btn-secondary" title="Fetch symbols that call this">
+            ← Callers
+          </button>
+          <button id="btn-expand-callees" class="btn-secondary" title="Fetch symbols called by this">
+            Callees →
+          </button>
+        </div>
         <button id="btn-close-detail" class="btn-ghost" aria-label="Close detail panel">✕ Close</button>
       </div>
     </aside>
