@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 0.1.1, patch, minor, major) — leave blank to use current __init__.py version"
+        description: "Version to publish (e.g. 0.2.1, patch, minor, major) — leave blank if tag was pushed"
         required: false
         default: ""
         type: string
@@ -30,6 +30,10 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   build:
     name: Build source and binary distribution
@@ -45,22 +49,27 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set release version
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build hatchling hatch-vcs
+
+      - name: Determine & Tag Version (if workflow_dispatch input provided)
         id: set_version
         run: |
           python - << 'EOF'
-          import os, re
+          import os, re, subprocess
 
           tag = os.environ.get("GITHUB_REF_NAME", "")
           input_ver = os.environ.get("INPUT_VERSION", "").strip()
-          init_path = "src/node_walk/__init__.py"
 
-          with open(init_path, "r", encoding="utf-8") as f:
-              content = f.read()
+          # Fetch latest release tag from git
+          try:
+              latest_tag = subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], text=True).strip()
+          except Exception:
+              latest_tag = "v0.1.0"
 
-          m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
-          current_ver = m.group(1) if m else "0.1.0"
-          
+          current_ver = latest_tag.lstrip("v")
           target_ver = current_ver
 
           if input_ver:
@@ -76,26 +85,27 @@ jobs:
                       target_ver = f"{parts[0]}.{parts[1]}.{parts[2]+1}"
               else:
                   target_ver = input_ver.lstrip("v")
+              
+              new_tag = f"v{target_ver}"
+              print(f"Creating and pushing new Git tag: {new_tag}")
+              subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+              subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+              subprocess.run(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"], check=True)
+              # Push tag back to repository
+              remote_url = f"https://x-access-token:{os.environ['GITHUB_TOKEN']}@github.com/{os.environ['GITHUB_REPOSITORY']}.git"
+              subprocess.run(["git", "push", remote_url, new_tag], check=True)
           elif os.environ.get("GITHUB_REF_TYPE") == "tag" and tag.startswith("v"):
               target_ver = tag.lstrip("v")
 
-          print(f"Setting package version to: {target_ver}")
-          new_content = re.sub(r'__version__\s*=\s*["\'][^"\']+["\']', f'__version__ = "{target_ver}"', content)
-          with open(init_path, "w", encoding="utf-8") as f:
-              f.write(new_content)
-
+          print(f"Target package release version: {target_ver}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"version={target_ver}\n")
           EOF
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install build hatchling
-
-      - name: Build distributions
+      - name: Build package distributions (sdist & wheel)
         run: python -m build
 
       - name: Store distribution packages
@@ -111,8 +121,6 @@ jobs:
     environment:
       name: ${{ inputs.target || 'pypi' }}
       url: ${{ (inputs.target == 'testpypi') && 'https://test.pypi.org/p/node-walk' || 'https://pypi.org/p/node-walk' }}
-    permissions:
-      id-token: write # Required for Trusted Publishing (OIDC)
 
     steps:
       - name: Download distribution packages
@@ -132,8 +140,6 @@ jobs:
     needs: [build]
     if: ${{ inputs.create_github_release != false }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Download distribution packages
