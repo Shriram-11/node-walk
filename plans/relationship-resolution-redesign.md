@@ -805,3 +805,442 @@ The right fix is not just "make the current resolver smarter." The better long-t
 - materialize the graph from those results
 
 That gives `node-walk` a graph it can trust, a pipeline it can debug, and a foundation that can grow into stronger semantic analysis without rewriting the whole product again.
+
+---
+
+## 18. Concrete Implementation Checklist
+
+This section turns the redesign into an execution plan tied to the current codebase.
+
+### 18.1 Phase A: Establish Baseline Metrics
+
+Purpose:
+
+- capture current behavior before changing architecture
+- create a regression target for future iterations
+
+Files to touch:
+
+- `src/node_walk/storage/sqlite_store.py`
+- optional new helper: `src/node_walk/debug/` or a small CLI/report script
+- `tests/` for metric-oriented integration fixtures if desired
+
+Tasks:
+
+- add helper queries for counts by:
+  - relationship type
+  - resolution status
+  - unresolved semantic relationships
+- add a report path for:
+  - total `CALLS`
+  - resolved `CALLS`
+  - probable `CALLS`
+  - unresolved `CALLS`
+- capture one baseline snapshot for `jarvis`
+
+Definition of done:
+
+- we can measure before/after improvements without manual SQL spelunking
+
+### 18.2 Phase B: Introduce Fact Models and Schema
+
+Purpose:
+
+- create a storage layer for raw semantic observations
+
+Files to touch:
+
+- `src/node_walk/ir/models.py`
+- optional new file: `src/node_walk/ir/facts.py`
+- `src/node_walk/storage/schema.py`
+- `src/node_walk/storage/base.py`
+- `src/node_walk/storage/sqlite_store.py`
+- storage-related tests
+
+Tasks:
+
+- add model(s) for raw relationship facts, for example:
+  - `RelationshipFact`
+  - `FactType`
+  - `FactStatus`
+- add SQLite schema for `relationship_facts`
+- add storage APIs such as:
+  - `store_fact(...)`
+  - `store_facts(...)`
+  - `get_facts_by_type(...)`
+  - `get_pending_facts(...)`
+  - `update_fact_resolution(...)`
+  - `clear_materialized_relationships(...)` if needed
+
+Design notes:
+
+- keep the existing `relationships` table intact
+- do not remove or rename current graph-facing storage yet
+
+Definition of done:
+
+- raw semantic facts can be stored and queried independently of final graph edges
+
+### 18.3 Phase C: Refactor Python Extraction to Emit Facts
+
+Purpose:
+
+- move semantic observation out of final-edge creation
+
+Primary files to touch:
+
+- `src/node_walk/analysis/python/visitor.py`
+- `src/node_walk/analysis/python/__init__.py` if exports need updating
+- `src/node_walk/analysis/python/` for any new extraction helpers
+- `src/node_walk/ir/models.py` or `ir/facts.py`
+- analyzer tests
+
+Tasks inside `visitor.py`:
+
+- keep symbol extraction logic
+- keep `CONTAINS` relationship emission
+- stop emitting most final `CALLS` edges directly
+- emit raw call facts instead
+- stop relying on `_local_by_name` / `_local_by_qname` for final semantic resolution
+
+Implementation subtasks:
+
+- add helper to parse call shape into:
+  - `call_text`
+  - `callee_name`
+  - `receiver_text`
+  - `qualified_hint`
+- add helper to emit raw import facts
+- add helper to emit raw inheritance facts
+
+Definition of done:
+
+- parsing produces symbols, structural edges, and raw semantic facts
+
+### 18.4 Phase D: Pre-Register Class Members Before Body Analysis
+
+Purpose:
+
+- fix forward references and improve class-local resolution
+
+Primary files to touch:
+
+- `src/node_walk/analysis/python/visitor.py`
+- possibly `src/node_walk/analysis/python/scope.py`
+- tests for class member registration and `self.method()` resolution
+
+Tasks:
+
+- add a class-member registry keyed by class symbol id or qualified name
+- split class handling into:
+  - class symbol registration
+  - member pre-scan
+  - body analysis
+- ensure methods defined later in the class are visible when analyzing earlier methods
+
+Suggested implementation shape:
+
+- add a helper like `_collect_class_members(...)`
+- register method and field symbols before descending into method call analysis
+- preserve current containment relationships
+
+Definition of done:
+
+- `self.method_b()` inside `method_a()` can resolve even if `method_b()` is declared later
+
+### 18.5 Phase E: Add Resolver Pipeline Entry Point
+
+Purpose:
+
+- replace the single generic cross-file resolver with an explicit staged pipeline
+
+Primary files to touch:
+
+- `src/node_walk/indexer.py`
+- new package: `src/node_walk/resolution/`
+- tests for orchestration
+
+Suggested new files:
+
+- `src/node_walk/resolution/__init__.py`
+- `src/node_walk/resolution/base.py`
+- `src/node_walk/resolution/calls.py`
+- `src/node_walk/resolution/imports.py`
+- `src/node_walk/resolution/inheritance.py`
+- optional `src/node_walk/resolution/materialize.py`
+
+Tasks:
+
+- add a resolver orchestration step after storing symbols/facts
+- keep `Indexer.index()` as the top-level flow owner
+- deprecate direct dependence on `_resolve_cross_file()` as the main semantic resolution mechanism
+
+Suggested indexer flow:
+
+1. discover files
+2. analyze files
+3. store files, symbols, structural edges, and facts
+4. run resolver passes
+5. materialize final semantic relationships
+6. report resolution stats
+
+Definition of done:
+
+- semantic resolution is an explicit pipeline, not a single name-matching loop
+
+### 18.6 Phase F: Implement First Call Resolvers
+
+Purpose:
+
+- land the highest-value behavior improvements first
+
+Primary files to touch:
+
+- `src/node_walk/resolution/calls.py`
+- `src/node_walk/storage/base.py`
+- `src/node_walk/storage/sqlite_store.py`
+- tests for resolver behavior
+
+Resolvers to implement first:
+
+- `InFileCallResolver`
+- `ClassMemberCallResolver`
+- `ConstructorCallResolver`
+
+Tasks:
+
+- resolve exact local function/method names within a file
+- resolve `self.foo()` using enclosing class membership
+- optionally resolve `cls.foo()` where supported
+- resolve `ClassName()` to `ClassName.__init__` if available, else class symbol
+- update fact status and diagnostics
+- materialize `CALLS` relationships from resolved/probable facts
+
+Definition of done:
+
+- the most common same-file and same-class call relationships appear in the graph
+
+### 18.7 Phase G: Implement Import Resolver
+
+Purpose:
+
+- create the namespace context needed for accurate cross-file calls
+
+Primary files to touch:
+
+- `src/node_walk/resolution/imports.py`
+- `src/node_walk/storage/sqlite_store.py`
+- `src/node_walk/indexer.py`
+- tests for import facts and aliases
+
+Tasks:
+
+- resolve import facts into graph edges
+- build a per-file import context map
+- support:
+  - `import pkg.module`
+  - `import pkg.module as alias`
+  - `from pkg import X`
+  - `from pkg import X as Y`
+  - relative imports used in current codebase fixtures
+
+Definition of done:
+
+- later resolver passes can ask "what names are visible in this file?"
+
+### 18.8 Phase H: Implement Cross-File Call Resolution
+
+Purpose:
+
+- recover the bulk of meaningful unresolved `CALLS`
+
+Primary files to touch:
+
+- `src/node_walk/resolution/calls.py`
+- `src/node_walk/storage/sqlite_store.py`
+- `src/node_walk/indexer.py`
+- resolver integration tests
+
+Tasks:
+
+- use import context for unqualified call names
+- resolve module-qualified or alias-qualified calls
+- apply suffix/simple-name fallback only when unambiguous
+- mark ambiguous matches as `probable` or `unresolved`
+- write clear diagnostics for misses
+
+Definition of done:
+
+- cross-file `CALLS` no longer depend on `metadata["target_name"]` alone
+
+### 18.9 Phase I: Migrate Inheritance Resolution
+
+Purpose:
+
+- bring `EXTENDS` / `IMPLEMENTS` into the same fact-driven pipeline
+
+Primary files to touch:
+
+- `src/node_walk/analysis/python/visitor.py`
+- `src/node_walk/resolution/inheritance.py`
+- `src/node_walk/indexer.py`
+- inheritance tests
+
+Tasks:
+
+- emit raw inheritance facts
+- resolve base types after symbol collection
+- materialize final `EXTENDS` / `IMPLEMENTS` edges
+- use symbol kinds and interface markers to decide relationship type
+
+Definition of done:
+
+- inheritance resolution uses the same staged architecture as calls/imports
+
+### 18.10 Phase J: Update Query Engine and Explorer API
+
+Purpose:
+
+- make consumers reflect the improved graph correctly
+
+Primary files to touch:
+
+- `src/node_walk/query/engine.py`
+- `src/node_walk/web/server.py`
+- `src/node_walk/web/app.js`
+- API and UI tests
+
+Tasks:
+
+- ensure caller/callee counts use `RelationshipType.CALLS`
+- optionally add:
+  - caller list payloads
+  - callee list payloads
+  - resolution diagnostics for debug views
+- expose edge resolution status consistently
+- style `probable` edges differently in the UI
+
+Definition of done:
+
+- graph consumers show the improved backend truth without inflating counts
+
+### 18.11 Phase K: Cleanup and Documentation
+
+Purpose:
+
+- remove migration scaffolding and document the new architecture
+
+Primary files to touch:
+
+- `README.md`
+- `plans/plan.md` if architectural notes should be synchronized
+- `src/node_walk/indexer.py`
+- `src/node_walk/analysis/python/visitor.py`
+- any obsolete resolver fallback code
+
+Tasks:
+
+- remove old inline semantic-resolution logic
+- remove or simplify `_resolve_cross_file()` if superseded
+- document the fact -> resolver -> materialized graph pipeline
+- add operator guidance for re-resolution vs re-indexing
+
+Definition of done:
+
+- the codebase reflects one clear mental model instead of mixed old/new behavior
+
+## 19. Suggested Work Order for the First PRs
+
+If this should be broken into manageable pull requests, I would do it like this:
+
+### PR 1: Baseline Metrics and Fact Schema
+
+Scope:
+
+- add fact models
+- add `relationship_facts` schema
+- add storage APIs
+- add baseline metrics helpers
+
+Why first:
+
+- minimal behavior change
+- establishes the new persistence layer safely
+
+### PR 2: Python Extraction Refactor
+
+Scope:
+
+- emit raw call facts
+- pre-register class members
+- keep current graph mostly intact where needed
+
+Why second:
+
+- gets the parser producing the right raw data
+- unlocks the new resolvers
+
+### PR 3: First Call Resolvers and Materialization
+
+Scope:
+
+- in-file resolution
+- `self.method()` resolution
+- constructor resolution
+- materialized `CALLS` edges from facts
+
+Why third:
+
+- delivers the first visible quality jump
+
+### PR 4: Import-Aware Cross-File Resolution
+
+Scope:
+
+- import resolver
+- alias handling
+- cross-file call resolution
+
+Why fourth:
+
+- brings back many of the currently missing edges
+
+### PR 5: Explorer/API Polish
+
+Scope:
+
+- caller/callee lists
+- accurate counts
+- resolution-aware styling
+
+Why fifth:
+
+- UI improvements land after backend correctness is real
+
+### PR 6: Inheritance Pipeline and Cleanup
+
+Scope:
+
+- fact-based inheritance resolution
+- remove obsolete fallback logic
+- update docs
+
+Why sixth:
+
+- completes the architecture migration cleanly
+
+## 20. Recommended First Coding Slice
+
+If implementation starts immediately, the first slice I would code in this repo is:
+
+1. Add `relationship_facts` schema and models.
+2. Refactor `visitor.py` to emit raw call facts.
+3. Pre-register class members in `visitor.py`.
+4. Add a small `resolution/calls.py` with:
+   - in-file exact resolution
+   - `self.method()` resolution
+   - constructor resolution
+5. Materialize `CALLS` edges back into `relationships`.
+6. Re-index `jarvis` and compare metrics.
+
+That is the smallest slice that validates the new architecture and should materially improve graph usefulness.
