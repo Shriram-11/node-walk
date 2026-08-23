@@ -7,6 +7,7 @@ import pytest
 from node_walk.analysis.python_analyzer import PythonAnalyzer
 from node_walk.ir.models import (
     FileInfo,
+    FactType,
     Language,
     RelationshipType,
     ResolutionStatus,
@@ -68,6 +69,7 @@ class TestRelationshipExtraction:
     def setup_method(self):
         self.result = _analyze("services.py")
         self.rels = self.result.relationships
+        self.facts = self.result.relationship_facts
 
     def test_contains_relationships_present(self):
         contains = [r for r in self.rels if r.type == RelationshipType.CONTAINS]
@@ -95,6 +97,23 @@ class TestRelationshipExtraction:
         for c in calls:
             assert c.source_location is not None
             assert c.source_location.line >= 1
+
+    def test_call_facts_present(self):
+        call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
+        assert len(call_facts) > 0
+
+    def test_call_facts_capture_receiver_text(self):
+        call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
+        assert any(f.raw_text == "self._notify" and f.receiver_text == "self" for f in call_facts)
+
+    def test_self_method_forward_reference_resolves(self):
+        calls = [
+            r for r in self.rels
+            if r.type == RelationshipType.CALLS and r.metadata.get("call_text") == "self._notify"
+        ]
+        assert len(calls) == 1
+        assert calls[0].target_id != ""
+        assert calls[0].resolution == ResolutionStatus.RESOLVED
 
 
 class TestAbcDetection:

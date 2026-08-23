@@ -1,6 +1,7 @@
 """
 AST visitor — walks a Tree-sitter parse tree and collects
-symbols and relationships for a single Python source file.
+symbols, structural relationships, and raw semantic facts for a single
+Python source file.
 
 This module contains:
   - Module-level helper functions (node text, line numbers, docstrings)
@@ -26,11 +27,18 @@ import tree_sitter_python as tspython
 from tree_sitter import Language as TSLanguage, Node, Parser
 
 from node_walk.analysis.python.scope import Scope
-from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.enums import (
+    FactType,
+    Language,
+    RelationshipType,
+    ResolutionStatus,
+    SymbolKind,
+)
 from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Relationship,
+    RelationshipFact,
     SourceLocation,
     Symbol,
 )
@@ -135,11 +143,15 @@ class SymbolCollector:
         self.source = source_bytes
         self.symbols: list[Symbol] = []
         self.relationships: list[Relationship] = []
+        self.relationship_facts: list[RelationshipFact] = []
 
         # Fast lookup: simple name → Symbol (for in-file resolution)
         self._local_by_name: dict[str, Symbol] = {}
         # Fast lookup: qualified name → Symbol (for in-file resolution)
         self._local_by_qname: dict[str, Symbol] = {}
+        self._symbols_by_id: dict[str, Symbol] = {}
+        # Per-class member registry populated before method body analysis.
+        self._class_members: dict[str, dict[str, Symbol]] = {}
 
         self._scope = Scope()
         self._module_qname = derive_module_qname(file_info.path)
@@ -318,11 +330,17 @@ class SymbolCollector:
             )
 
         if body_node:
+            self._pre_register_class_methods(body_node, class_sym)
             self._scope.push(class_sym)
             for child in body_node.children:
                 ct = child.type
                 if ct in ("function_definition", "decorated_definition"):
-                    self._handle_function_or_decorated(child, parent_sym=class_sym)
+                    precreated = self._lookup_precreated_method(class_sym, child)
+                    self._handle_function_or_decorated(
+                        child,
+                        parent_sym=class_sym,
+                        precreated_sym=precreated,
+                    )
                 elif ct == "class_definition":
                     self._handle_class(child)
                 elif ct in ("expression_statement", "assignment"):
@@ -374,20 +392,28 @@ class SymbolCollector:
     # ------------------------------------------------------------------
 
     def _handle_function_or_decorated(
-        self, node: Node, parent_sym: Symbol | None
+        self,
+        node: Node,
+        parent_sym: Symbol | None,
+        precreated_sym: Symbol | None = None,
     ) -> None:
         if node.type == "decorated_definition":
             for child in node.children:
                 if child.type == "function_definition":
-                    self._handle_function(child, parent_sym)
+                    self._handle_function(child, parent_sym, precreated_sym=precreated_sym)
                     return
                 if child.type == "class_definition":
                     self._handle_class(child)
                     return
         else:
-            self._handle_function(node, parent_sym)
+            self._handle_function(node, parent_sym, precreated_sym=precreated_sym)
 
-    def _handle_function(self, node: Node, parent_sym: Symbol | None) -> None:
+    def _handle_function(
+        self,
+        node: Node,
+        parent_sym: Symbol | None,
+        precreated_sym: Symbol | None = None,
+    ) -> None:
         name_node = node.child_by_field_name("name")
         if not name_node:
             return
@@ -413,7 +439,7 @@ class SymbolCollector:
         body_node = node.child_by_field_name("body")
         doc = first_docstring(body_node, self.source) if body_node else ""
 
-        func_sym = Symbol(
+        func_sym = precreated_sym or Symbol(
             name=name,
             qualified_name=qname,
             kind=kind,
@@ -426,10 +452,10 @@ class SymbolCollector:
             docstring=doc,
             is_async=is_async,
         )
-        self._register(func_sym)
-
-        container = parent_sym or self._file_symbol
-        self._emit_contains(container.id, func_sym.id, start_line(node))
+        if precreated_sym is None:
+            self._register(func_sym)
+            container = parent_sym or self._file_symbol
+            self._emit_contains(container.id, func_sym.id, start_line(node))
 
         if body_node:
             self._scope.push(func_sym)
@@ -460,6 +486,7 @@ class SymbolCollector:
 
         call_text = node_text(func_node, self.source)
         callee_name = call_text.split(".")[-1]
+        receiver_text = call_text.rsplit(".", 1)[0] if "." in call_text else ""
         loc = SourceLocation(
             file_id=self.file_info.id,
             line=start_line(node),
@@ -469,14 +496,37 @@ class SymbolCollector:
         target_id = ""
         resolution = ResolutionStatus.UNRESOLVED
 
+        class_match = self._resolve_class_member_call(caller_sym, receiver_text, callee_name)
         fqn_match = self._local_by_qname.get(call_text)
         name_match = self._local_by_name.get(callee_name)
-        if fqn_match:
+        if class_match:
+            target_id = class_match.id
+            resolution = ResolutionStatus.RESOLVED
+        elif fqn_match:
             target_id = fqn_match.id
             resolution = ResolutionStatus.RESOLVED
         elif name_match:
             target_id = name_match.id
             resolution = ResolutionStatus.PROBABLE
+
+        self.relationship_facts.append(
+            RelationshipFact(
+                file_id=self.file_info.id,
+                source_symbol_id=caller_sym.id,
+                fact_type=FactType.CALL,
+                raw_text=call_text,
+                simple_name=callee_name,
+                receiver_text=receiver_text,
+                qualified_hint=call_text if "." in call_text else "",
+                source_location=loc,
+                scope_symbol_id=caller_sym.id,
+                metadata={
+                    "call_text": call_text,
+                    "callee_name": callee_name,
+                    "receiver_text": receiver_text,
+                },
+            )
+        )
 
         self.relationships.append(
             Relationship(
@@ -520,8 +570,12 @@ class SymbolCollector:
     def _register(self, sym: Symbol, skip_append: bool = False) -> None:
         if not skip_append:
             self.symbols.append(sym)
+        self._symbols_by_id[sym.id] = sym
         self._local_by_name[sym.name] = sym
         self._local_by_qname[sym.qualified_name] = sym
+        if sym.parent_id and sym.kind in (SymbolKind.METHOD, SymbolKind.FIELD, SymbolKind.CONSTANT):
+            members = self._class_members.setdefault(sym.parent_id, {})
+            members[sym.name] = sym
 
     def _emit_contains(self, source_id: str, target_id: str, line: int) -> None:
         self.relationships.append(
@@ -557,3 +611,90 @@ class SymbolCollector:
                     if sub.type == "identifier" and sub.text:
                         targets.append(sub.text.decode("utf-8", errors="replace"))
         return [t for t in targets if t]
+
+    def _pre_register_class_methods(self, body_node: Node, class_sym: Symbol) -> None:
+        for child in body_node.children:
+            func_node = self._unwrap_function_node(child)
+            if not func_node:
+                continue
+            name_node = func_node.child_by_field_name("name")
+            if not name_node:
+                continue
+            name = node_text(name_node, self.source)
+            qname = f"{class_sym.qualified_name}.{name}"
+            if qname in self._local_by_qname:
+                continue
+
+            is_async = any(c.type == "async" for c in func_node.children)
+            params_node = func_node.child_by_field_name("parameters")
+            return_node = func_node.child_by_field_name("return_type")
+            sig_parts = []
+            if params_node:
+                sig_parts.append(node_text(params_node, self.source))
+            if return_node:
+                sig_parts.append(f"-> {node_text(return_node, self.source)}")
+            signature = " ".join(sig_parts)
+            body = func_node.child_by_field_name("body")
+            doc = first_docstring(body, self.source) if body else ""
+
+            method_sym = Symbol(
+                name=name,
+                qualified_name=qname,
+                kind=SymbolKind.METHOD if class_sym.kind in (SymbolKind.CLASS, SymbolKind.INTERFACE) else SymbolKind.FUNCTION,
+                language=Language.PYTHON,
+                file_id=self.file_info.id,
+                start_line=start_line(func_node),
+                end_line=end_line(func_node),
+                signature=signature,
+                parent_id=class_sym.id,
+                docstring=doc,
+                is_async=is_async,
+            )
+            self._register(method_sym)
+            self._emit_contains(class_sym.id, method_sym.id, start_line(func_node))
+
+    def _lookup_precreated_method(self, class_sym: Symbol, node: Node) -> Symbol | None:
+        func_node = self._unwrap_function_node(node)
+        if not func_node:
+            return None
+        name_node = func_node.child_by_field_name("name")
+        if not name_node:
+            return None
+        name = node_text(name_node, self.source)
+        return self._class_members.get(class_sym.id, {}).get(name)
+
+    @staticmethod
+    def _unwrap_function_node(node: Node) -> Node | None:
+        if node.type == "function_definition":
+            return node
+        if node.type == "decorated_definition":
+            for child in node.children:
+                if child.type == "function_definition":
+                    return child
+        return None
+
+    def _resolve_class_member_call(
+        self,
+        caller_sym: Symbol,
+        receiver_text: str,
+        callee_name: str,
+    ) -> Symbol | None:
+        if receiver_text not in {"self", "cls"}:
+            return None
+        owner = self._resolve_enclosing_class(caller_sym)
+        if not owner:
+            return None
+        return self._class_members.get(owner.id, {}).get(callee_name)
+
+    def _resolve_enclosing_class(self, sym: Symbol) -> Symbol | None:
+        current = sym
+        seen: set[str] = set()
+        while current.parent_id and current.parent_id not in seen:
+            seen.add(current.parent_id)
+            parent = self._symbols_by_id.get(current.parent_id)
+            if not parent:
+                return None
+            if parent.kind in (SymbolKind.CLASS, SymbolKind.INTERFACE):
+                return parent
+            current = parent
+        return None
