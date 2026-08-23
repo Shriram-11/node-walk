@@ -14,8 +14,9 @@ Local-first · Lightweight · Fast indexing · SQLite backed · CLI & Visualizat
 - **Smart Symbol Search**: Find symbols by simple name (`chat`), qualified dotted path (`ModelAdapter.chat`), or fuzzy typo matching (`ModelAdpater.chat`).
 - **Exact Source Retrieval**: View definitions, signatures, and exact source ranges instantly.
 - **Relationship Navigation**: Find callers, callees, references, class implementations / ABCs, and imports.
-- **Graph Traversal & Visualization**: Trace outgoing call chains and incoming blast radiuses rendered directly in terminal (ASCII tree), exported to Graphviz (`.dot`), or generated as Mermaid diagrams.
-- **Lightweight & Self-Contained**: Pure Python + Tree-sitter + SQLite. Zero external database services or cloud dependencies.
+- **Graph Traversal & Visualization**: Trace outgoing call chains and incoming blast radiuses rendered in terminal (ASCII tree), exported to Graphviz (`.dot`), or generated as Mermaid diagrams.
+- **Browser Graph Explorer**: `node-walk serve` launches a local interactive Cytoscape.js graph — click nodes, expand neighbours, search symbols, filter by kind/relationship, and inspect source — all without leaving the browser.
+- **Lightweight & Self-Contained**: Pure Python + Tree-sitter + SQLite + stdlib `http.server`. Zero external database services, cloud dependencies, or build steps.
 
 ---
 
@@ -87,7 +88,25 @@ node-walk blast-radius UserService.create_user --format tree
 node-walk graph ModelAdapter --depth 3 --format tree
 ```
 
-### 5. Utilities
+### 5. Browser Graph Explorer
+```bash
+# Launch the interactive graph explorer in your browser
+node-walk serve                        # default: http://localhost:7777
+node-walk serve --port 8888            # custom port
+node-walk serve --no-open              # start server only, don't auto-open
+```
+
+The explorer visualises **all** symbols and relationships as a force-directed interactive graph:
+
+| Action | Result |
+|---|---|
+| Click node | Highlight node + direct neighbours; open detail panel |
+| Double-click node | Lazy-expand 1-hop neighbours from the server |
+| Right-click node | Context menu: expand, focus subtree, hide, reset |
+| Search bar | Debounced fuzzy search → centre + select result |
+| Filter panel | Toggle visibility by SymbolKind / RelationshipType |
+
+### 6. Utilities
 ```bash
 # Show database statistics (symbol kinds, relationship counts)
 node-walk stats

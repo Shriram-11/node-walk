@@ -629,9 +629,44 @@ def show_help() -> None:
     table.add_row("stats", "Show database statistics (file, symbol, edge counts).")
     table.add_row("export", "Export the entire semantic graph as JSON.")
 
+    table.add_section()
+    table.add_row("[bold white]Browser Explorer[/bold white]", "")
+    table.add_row("serve", "Launch the interactive graph explorer in your browser.")
+
     console.print(table)
     console.print("\n[dim]To see options for any command, run: [bold]node-walk <command> --help[/bold][/dim]")
 
+
+
+@app.command()
+def serve(
+    port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on.")] = 7777,
+    host: Annotated[str, typer.Option("--host", help="Host to bind to.")] = "localhost",
+    no_open: Annotated[bool, typer.Option("--no-open", help="Do not open the browser automatically.")] = False,
+) -> None:
+    """Launch the interactive graph explorer in your browser."""
+    db = _find_db()
+    if db is None:
+        err_console.print(
+            "[red]No .node_walk/graph.db found.[/red] "
+            "Run [bold]node-walk index <path>[/bold] first."
+        )
+        raise typer.Exit(1)
+
+    url = f"http://{host}:{port}"
+    console.print(
+        Panel(
+            f"[bold cyan]Graph explorer[/bold cyan] starting at [bold]{url}[/bold]\n"
+            f"[dim]DB:[/dim] {db}\n"
+            "[dim]Press Ctrl+C to stop.[/dim]",
+            title="node-walk serve",
+            border_style="cyan",
+        )
+    )
+
+    from node_walk.web.server import start_server
+
+    start_server(db, host=host, port=port, open_browser=not no_open, block=True)
 
 
 # ---------------------------------------------------------------------------
