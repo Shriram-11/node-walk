@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>node-walk · Graph Explorer</title>
+  <meta name="description" content="Interactive browser-based code graph explorer for node-walk — visualise symbols and relationships in your codebase." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <!-- Cytoscape.js from CDN — no bundler needed -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <!-- ================================================================
+       Top bar: logo + search + filter toggle
+  ================================================================ -->
+  <header id="topbar" role="banner">
+    <div id="logo" aria-label="node-walk graph explorer">
+      <span class="logo-icon">⬡</span>
+      <span class="logo-text">node<span class="logo-accent">·</span>walk</span>
+      <span class="logo-sub">Graph Explorer</span>
+    </div>
+
+    <div id="search-wrap">
+      <label for="search-input" class="sr-only">Search symbols</label>
+      <span class="search-icon" aria-hidden="true">⌕</span>
+      <input
+        id="search-input"
+        type="search"
+        placeholder="Search symbols…"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="Search symbols by name"
+      />
+      <div id="search-results" role="listbox" aria-label="Search results" hidden></div>
+    </div>
+
+    <div id="topbar-actions">
+      <button id="btn-fit" class="icon-btn" title="Fit graph to viewport" aria-label="Fit graph">⊞</button>
+      <button id="btn-filter-toggle" class="icon-btn" title="Toggle filter panel" aria-label="Toggle filters" aria-expanded="false">⊟</button>
+      <button id="btn-layout" class="icon-btn" title="Re-run layout" aria-label="Re-run layout">↻</button>
+    </div>
+  </header>
+
+  <!-- ================================================================
+       Main: canvas + side panels
+  ================================================================ -->
+  <main id="main" role="main">
+
+    <!-- Filter panel (left slide-in) -->
+    <aside id="filter-panel" role="complementary" aria-label="Filter panel" hidden>
+      <h2 class="panel-title">Filters</h2>
+
+      <section class="filter-section">
+        <h3 class="filter-heading">Symbol Kind</h3>
+        <ul id="kind-filters" class="filter-list" role="group" aria-label="Symbol kind filters">
+          <!-- populated by app.js -->
+        </ul>
+      </section>
+
+      <section class="filter-section">
+        <h3 class="filter-heading">Relationship Type</h3>
+        <ul id="rel-filters" class="filter-list" role="group" aria-label="Relationship type filters">
+          <!-- populated by app.js -->
+        </ul>
+      </section>
+
+      <button id="btn-reset-filters" class="btn-secondary">Reset all</button>
+    </aside>
+
+    <!-- Cytoscape graph canvas -->
+    <div id="cy-wrap">
+      <div id="cy" role="img" aria-label="Interactive code dependency graph"></div>
+      <div id="cy-loading" aria-live="polite" aria-label="Loading graph">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading graph…</p>
+      </div>
+      <div id="cy-empty" hidden>
+        <p>No symbols found. Run <code>node-walk index &lt;path&gt;</code> first.</p>
+      </div>
+    </div>
+
+    <!-- Detail panel (right) -->
+    <aside id="detail-panel" role="complementary" aria-label="Symbol detail" hidden>
+      <div id="detail-header">
+        <h2 id="detail-name" class="detail-name"></h2>
+        <span id="detail-kind" class="detail-kind-badge"></span>
+      </div>
+      <dl id="detail-meta" class="detail-meta">
+        <div class="detail-row">
+          <dt>File</dt>
+          <dd id="detail-file"></dd>
+        </div>
+        <div class="detail-row">
+          <dt>Lines</dt>
+          <dd id="detail-lines"></dd>
+        </div>
+        <div class="detail-row" id="detail-sig-row">
+          <dt>Signature</dt>
+          <dd id="detail-sig"></dd>
+        </div>
+        <div class="detail-row">
+          <dt>Callers</dt>
+          <dd id="detail-callers"></dd>
+        </div>
+        <div class="detail-row">
+          <dt>Callees</dt>
+          <dd id="detail-callees"></dd>
+        </div>
+      </dl>
+
+      <div id="detail-docstring-wrap" hidden>
+        <h3 class="detail-section-title">Docstring</h3>
+        <p id="detail-docstring" class="detail-docstring"></p>
+      </div>
+
+      <div id="detail-source-wrap" hidden>
+        <h3 class="detail-section-title">Source</h3>
+        <pre id="detail-source" class="detail-source"><code id="detail-source-code"></code></pre>
+      </div>
+
+      <div id="detail-actions">
+        <button id="btn-expand-node" class="btn-primary" title="Fetch 1-hop neighbours and add to graph">
+          Expand neighbours
+        </button>
+        <button id="btn-close-detail" class="btn-ghost" aria-label="Close detail panel">✕ Close</button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ================================================================
+       Status bar
+  ================================================================ -->
+  <footer id="statusbar" role="contentinfo">
+    <span id="status-nodes">— nodes</span>
+    <span class="status-sep">·</span>
+    <span id="status-edges">— edges</span>
+    <span class="status-sep">·</span>
+    <span id="status-selected" class="status-selected"></span>
+  </footer>
+
+  <!-- Context menu (right-click) -->
+  <ul id="ctx-menu" class="ctx-menu" role="menu" hidden>
+    <li role="menuitem" id="ctx-expand">⊕ Expand neighbours</li>
+    <li role="menuitem" id="ctx-focus">◎ Focus subgraph</li>
+    <li role="menuitem" id="ctx-hide">✕ Hide node</li>
+    <li role="menuitem" id="ctx-reset-focus">⊘ Reset focus</li>
+  </ul>
+
+  <!-- Tooltip -->
+  <div id="tooltip" role="tooltip" aria-hidden="true" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

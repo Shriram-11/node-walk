@@ -44,6 +44,15 @@ path = "src/node_walk/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/node_walk"]
 
+[tool.hatch.build.targets.wheel.shared-data]
+# Include all static web assets in the installed package
+"src/node_walk/web" = "node_walk/web"
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/node_walk/web/index.html" = "node_walk/web/index.html"
+"src/node_walk/web/style.css"  = "node_walk/web/style.css"
+"src/node_walk/web/app.js"     = "node_walk/web/app.js"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

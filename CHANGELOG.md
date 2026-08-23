@@ -9,7 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
----
+### Added
+- **`node-walk serve` command**: Launches an embedded local HTTP server (`localhost:7777` by default) and auto-opens the browser to the interactive graph explorer. Accepts `--port`, `--host`, and `--no-open` flags.
+- **Graph Explorer UI** (`src/node_walk/web/`): A single-page browser application (no build step, no npm) that renders the full code graph using Cytoscape.js (CDN):
+  - Force-directed layout with manual drag support.
+  - Nodes coloured and shaped by `SymbolKind`; edges styled and coloured by `RelationshipType`.
+  - Click node → highlight it and direct neighbours + show detail panel (name, kind, file, lines, signature, docstring, source snippet).
+  - Double-click node → lazy 1-hop neighbour expansion via `/api/neighbors`.
+  - Right-click context menu: expand neighbours, focus subtree, hide node, reset focus.
+  - Debounced search bar backed by `/api/search` → centres and selects the top match.
+  - Filter panel (checkboxes) to show/hide nodes by `SymbolKind` and edges by `RelationshipType`; `CONTAINS` edges hidden by default.
+  - Tooltip on hover for nodes and edges.
+  - Fit-to-viewport and re-layout buttons.
+  - Status bar showing visible node/edge counts and selected symbol name.
+- **Web API** (`src/node_walk/web/server.py`): Zero-dependency HTTP server (Python `http.server`) exposing:
+  - `GET /api/graph[?kinds=…&rels=…]` — full graph for initial render, with optional kind/relationship filters.
+  - `GET /api/symbol/{id}` — symbol detail including source snippet, caller/callee counts.
+  - `GET /api/neighbors/{id}[?direction=out|in|both&rels=…]` — 1-hop neighbours for lazy canvas expansion.
+  - `GET /api/search?q=…` — fuzzy symbol search (reuses `QueryEngine.find_symbol`).
+  - `GET /api/stats` — graph statistics.
+- **API tests** (`tests/test_web_server.py`): Full test suite covering all five endpoints (schema validation, filter params, 404 handling, score ranges) plus a full smoke round-trip and static file serving tests.
+
+### Changed
+- **`pyproject.toml`**: Added `force-include` entries so `index.html`, `style.css`, and `app.js` are bundled in the installed wheel.
+- **`node-walk help`**: Added "Browser Explorer" section listing the `serve` command.
+
 
 ## [0.1.1] - 2026-08-20
 
