@@ -59,6 +59,12 @@ class SQLiteGraphStore(GraphStore):
     def store_result(self, result: AnalysisResult) -> None:
         self.store_results([result])
 
+    def store_relationships(self, relationships: list[Relationship]) -> None:
+        """Bulk-insert all relationships in a single transaction."""
+        with self._conn:
+            for rel in relationships:
+                self._insert_relationship(rel)
+
     def store_results(self, results: list[AnalysisResult]) -> None:
         """Bulk-insert all files, symbols, and relationships in a single transaction."""
         with self._conn:

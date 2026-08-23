@@ -75,29 +75,6 @@ class TestRelationshipExtraction:
         contains = [r for r in self.rels if r.type == RelationshipType.CONTAINS]
         assert len(contains) > 0
 
-    def test_calls_relationships_present(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        assert len(calls) > 0
-
-    def test_unresolved_calls_marked(self):
-        unresolved = [
-            r for r in self.rels
-            if r.type == RelationshipType.CALLS and r.resolution == ResolutionStatus.UNRESOLVED
-        ]
-        # There should be some unresolved calls (e.g., self.repo.save)
-        assert len(unresolved) >= 0  # may vary; just ensure no crash
-
-    def test_call_metadata_has_call_text(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        for c in calls:
-            assert "call_text" in c.metadata
-
-    def test_source_location_on_calls(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        for c in calls:
-            assert c.source_location is not None
-            assert c.source_location.line >= 1
-
     def test_call_facts_present(self):
         call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
         assert len(call_facts) > 0
@@ -105,15 +82,6 @@ class TestRelationshipExtraction:
     def test_call_facts_capture_receiver_text(self):
         call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
         assert any(f.raw_text == "self._notify" and f.receiver_text == "self" for f in call_facts)
-
-    def test_self_method_forward_reference_resolves(self):
-        calls = [
-            r for r in self.rels
-            if r.type == RelationshipType.CALLS and r.metadata.get("call_text") == "self._notify"
-        ]
-        assert len(calls) == 1
-        assert calls[0].target_id != ""
-        assert calls[0].resolution == ResolutionStatus.RESOLVED
 
 
 class TestAbcDetection:

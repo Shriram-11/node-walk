@@ -40,9 +40,40 @@ The codebase is currently in a mixed migration state:
 - raw call facts are now extracted and stored
 - legacy `CALLS` relationships are still emitted from the visitor for compatibility
 - some in-file resolution still happens during extraction
-- the dedicated resolver/materialization pipeline has not been implemented yet
+- the dedicated resolver/materialization pipeline has started, but is not complete yet
 
 This means consumers still work, but the architecture is intentionally temporary until the resolver pipeline takes over semantic edge creation.
+
+### Current Implementation Status
+
+The next phase is no longer just planned; it has been partially started in the worktree.
+
+Implemented or in progress:
+
+- a new `src/node_walk/resolution/` package exists
+- a resolver base abstraction has been added
+- first call resolvers have been introduced
+- `Indexer` has been updated to run resolver passes
+- `Indexer` now materializes `CALLS` relationships from resolved facts
+
+What is still incomplete in this phase:
+
+- legacy visitor-emitted `CALLS` edges still exist alongside fact-materialized edges
+- import-aware resolution has not been added yet
+- cross-file call resolution is still limited
+- inheritance has not been migrated onto the same pipeline
+- duplicate-edge handling and cleanup strategy still need review
+
+### Current Risks
+
+Subagents should be aware of these active risks in the present implementation state:
+
+- duplicate `CALLS` edges may exist because legacy and materialized paths are both active
+- resolver ordering may affect outcomes while the pipeline is still incomplete
+- noise filtering is currently more aggressive than the long-term plan recommends
+- some logic is still split between extraction-time resolution and resolver-time resolution
+
+These are expected migration risks, not necessarily regressions, but they should be treated as cleanup targets in the next steps.
 
 ### Next Recommended Work
 

@@ -30,6 +30,11 @@ class GraphStore(ABC):
         ...
 
     @abstractmethod
+    def store_relationships(self, relationships: list[Relationship]) -> None:
+        """Persist multiple relationships."""
+        ...
+
+    @abstractmethod
     def clear(self) -> None:
         """Remove all data. Used before a full re-index."""
         ...

@@ -493,22 +493,6 @@ class SymbolCollector:
             col=node.start_point[1],
         )
 
-        target_id = ""
-        resolution = ResolutionStatus.UNRESOLVED
-
-        class_match = self._resolve_class_member_call(caller_sym, receiver_text, callee_name)
-        fqn_match = self._local_by_qname.get(call_text)
-        name_match = self._local_by_name.get(callee_name)
-        if class_match:
-            target_id = class_match.id
-            resolution = ResolutionStatus.RESOLVED
-        elif fqn_match:
-            target_id = fqn_match.id
-            resolution = ResolutionStatus.RESOLVED
-        elif name_match:
-            target_id = name_match.id
-            resolution = ResolutionStatus.PROBABLE
-
         self.relationship_facts.append(
             RelationshipFact(
                 file_id=self.file_info.id,
@@ -525,17 +509,6 @@ class SymbolCollector:
                     "callee_name": callee_name,
                     "receiver_text": receiver_text,
                 },
-            )
-        )
-
-        self.relationships.append(
-            Relationship(
-                source_id=caller_sym.id,
-                target_id=target_id,
-                type=RelationshipType.CALLS,
-                source_location=loc,
-                resolution=resolution,
-                metadata={"call_text": call_text, "callee_name": callee_name},
             )
         )
 
