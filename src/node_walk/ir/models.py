@@ -15,7 +15,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.enums import (
+    FactStatus,
+    FactType,
+    Language,
+    RelationshipType,
+    ResolutionStatus,
+    SymbolKind,
+)
 
 
 class FileInfo(BaseModel):
@@ -86,6 +93,33 @@ class Relationship(BaseModel):
     model_config = {"frozen": True}
 
 
+class RelationshipFact(BaseModel):
+    """
+    A raw semantic observation captured during extraction before final resolution.
+
+    Unlike Relationship, a fact represents "what we saw in source" rather than the
+    final graph edge we concluded from that source.
+    """
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    file_id: str
+    source_symbol_id: str
+    fact_type: FactType
+    raw_text: str
+    simple_name: str = ""
+    receiver_text: str = ""
+    qualified_hint: str = ""
+    source_location: SourceLocation | None = None
+    scope_symbol_id: str | None = None
+    status: FactStatus = FactStatus.PENDING
+    resolved_target_id: str = ""
+    resolver_name: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"frozen": True}
+
+
 class AnalysisResult(BaseModel):
     """
     Complete output from analyzing a single file.
@@ -96,5 +130,6 @@ class AnalysisResult(BaseModel):
     file: FileInfo
     symbols: list[Symbol] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
+    relationship_facts: list[RelationshipFact] = Field(default_factory=list)
 
     model_config = {"frozen": True}

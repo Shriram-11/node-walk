@@ -10,12 +10,21 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
-from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, SymbolKind
+from node_walk.ir.enums import (
+    FactStatus,
+    FactType,
+    Language,
+    RelationshipType,
+    ResolutionStatus,
+    SymbolKind,
+)
 from node_walk.ir.models import (
     AnalysisResult,
     FileInfo,
     Relationship,
+    RelationshipFact,
     SourceLocation,
     Symbol,
 )
@@ -59,9 +68,12 @@ class SQLiteGraphStore(GraphStore):
                     self._insert_symbol(sym)
                 for rel in res.relationships:
                     self._insert_relationship(rel)
+                for fact in res.relationship_facts:
+                    self._insert_relationship_fact(fact)
 
     def clear(self) -> None:
         with self._conn:
+            self._conn.execute("DELETE FROM relationship_facts")
             self._conn.execute("DELETE FROM relationships")
             self._conn.execute("DELETE FROM symbols")
             self._conn.execute("DELETE FROM files")
@@ -73,6 +85,40 @@ class SQLiteGraphStore(GraphStore):
             self._conn.execute(
                 "UPDATE relationships SET target_id = ?, resolution = ? WHERE id = ?",
                 (target_id, resolution.value, rel_id),
+            )
+
+    def store_fact(self, fact: RelationshipFact) -> None:
+        self.store_facts([fact])
+
+    def store_facts(self, facts: list[RelationshipFact]) -> None:
+        with self._conn:
+            for fact in facts:
+                self._insert_relationship_fact(fact)
+
+    def update_relationship_fact(
+        self,
+        fact_id: str,
+        *,
+        status: FactStatus,
+        resolved_target_id: str = "",
+        resolver_name: str = "",
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        diagnostics_json = json.dumps(diagnostics or {})
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE relationship_facts
+                SET status = ?, resolved_target_id = ?, resolver_name = ?, diagnostics_json = ?
+                WHERE id = ?
+                """,
+                (
+                    status.value,
+                    resolved_target_id,
+                    resolver_name,
+                    diagnostics_json,
+                    fact_id,
+                ),
             )
 
     # ------------------------------------------------------------------
@@ -161,10 +207,33 @@ class SQLiteGraphStore(GraphStore):
         ).fetchall()
         return [self._row_to_rel(r) for r in rows]
 
+    def get_relationship_facts(
+        self,
+        fact_type: FactType | None = None,
+        status: FactStatus | None = None,
+    ) -> list[RelationshipFact]:
+        sql = "SELECT * FROM relationship_facts"
+        clauses: list[str] = []
+        params: list[str] = []
+
+        if fact_type:
+            clauses.append("fact_type = ?")
+            params.append(fact_type.value)
+        if status:
+            clauses.append("status = ?")
+            params.append(status.value)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY source_symbol_id, source_line, source_col, id"
+
+        rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_fact(r) for r in rows]
+
     def stats(self) -> dict[str, int]:
         files = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         symbols = self._conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
         rels = self._conn.execute("SELECT COUNT(*) FROM relationships").fetchone()[0]
+        facts = self._conn.execute("SELECT COUNT(*) FROM relationship_facts").fetchone()[0]
         unresolved = self._conn.execute(
             "SELECT COUNT(*) FROM relationships WHERE target_id = ''"
         ).fetchone()[0]
@@ -179,13 +248,28 @@ class SQLiteGraphStore(GraphStore):
         ).fetchall()
         rel_counts = {f"rel_{r['type'].lower()}": r["cnt"] for r in rel_rows}
 
+        fact_type_rows = self._conn.execute(
+            "SELECT fact_type, COUNT(*) as cnt FROM relationship_facts GROUP BY fact_type"
+        ).fetchall()
+        fact_type_counts = {f"facts_{r['fact_type'].lower()}": r["cnt"] for r in fact_type_rows}
+
+        fact_status_rows = self._conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM relationship_facts GROUP BY status"
+        ).fetchall()
+        fact_status_counts = {
+            f"facts_status_{r['status'].lower()}": r["cnt"] for r in fact_status_rows
+        }
+
         return {
             "files": files,
             "symbols": symbols,
             "relationships": rels,
+            "relationship_facts": facts,
             "unresolved_relationships": unresolved,
             **kind_counts,
             **rel_counts,
+            **fact_type_counts,
+            **fact_status_counts,
         }
 
     # ------------------------------------------------------------------
@@ -240,6 +324,36 @@ class SQLiteGraphStore(GraphStore):
             ),
         )
 
+    def _insert_relationship_fact(self, fact: RelationshipFact) -> None:
+        loc = fact.source_location
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO relationship_facts
+                (id, file_id, source_symbol_id, fact_type, raw_text, simple_name,
+                 receiver_text, qualified_hint, source_line, source_col, scope_symbol_id,
+                 status, resolved_target_id, resolver_name, metadata_json, diagnostics_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fact.id,
+                fact.file_id,
+                fact.source_symbol_id,
+                fact.fact_type.value,
+                fact.raw_text,
+                fact.simple_name,
+                fact.receiver_text,
+                fact.qualified_hint,
+                loc.line if loc else None,
+                loc.col if loc else None,
+                fact.scope_symbol_id,
+                fact.status.value,
+                fact.resolved_target_id,
+                fact.resolver_name,
+                json.dumps(fact.metadata),
+                json.dumps(fact.diagnostics),
+            ),
+        )
+
     # ------------------------------------------------------------------
     # Private helpers — row → model conversion
     # ------------------------------------------------------------------
@@ -288,4 +402,31 @@ class SQLiteGraphStore(GraphStore):
             source_location=loc,
             resolution=ResolutionStatus(row["resolution"]),
             metadata=json.loads(row["metadata_json"]),
+        )
+
+    @staticmethod
+    def _row_to_fact(row: sqlite3.Row) -> RelationshipFact:
+        loc: SourceLocation | None = None
+        if row["source_line"] is not None:
+            loc = SourceLocation(
+                file_id=row["file_id"],
+                line=row["source_line"],
+                col=row["source_col"] or 0,
+            )
+        return RelationshipFact(
+            id=row["id"],
+            file_id=row["file_id"],
+            source_symbol_id=row["source_symbol_id"],
+            fact_type=FactType(row["fact_type"]),
+            raw_text=row["raw_text"],
+            simple_name=row["simple_name"] or "",
+            receiver_text=row["receiver_text"] or "",
+            qualified_hint=row["qualified_hint"] or "",
+            source_location=loc,
+            scope_symbol_id=row["scope_symbol_id"],
+            status=FactStatus(row["status"]),
+            resolved_target_id=row["resolved_target_id"] or "",
+            resolver_name=row["resolver_name"] or "",
+            metadata=json.loads(row["metadata_json"]),
+            diagnostics=json.loads(row["diagnostics_json"]),
         )

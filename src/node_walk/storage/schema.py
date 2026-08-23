@@ -5,6 +5,7 @@ Tables:
   files         — one row per discovered source file
   symbols       — one row per code symbol (class, function, …)
   relationships — one row per semantic edge in the graph
+  relationship_facts — one row per raw semantic observation
 
 The schema is created idempotently using CREATE TABLE IF NOT EXISTS,
 so it is safe to call initialize() multiple times.
@@ -60,6 +61,27 @@ CREATE TABLE IF NOT EXISTS relationships (
 );
 """
 
+_CREATE_RELATIONSHIP_FACTS = """
+CREATE TABLE IF NOT EXISTS relationship_facts (
+    id                  TEXT PRIMARY KEY,
+    file_id             TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    source_symbol_id    TEXT NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+    fact_type           TEXT NOT NULL,
+    raw_text            TEXT NOT NULL,
+    simple_name         TEXT NOT NULL DEFAULT '',
+    receiver_text       TEXT NOT NULL DEFAULT '',
+    qualified_hint      TEXT NOT NULL DEFAULT '',
+    source_line         INTEGER,
+    source_col          INTEGER,
+    scope_symbol_id     TEXT REFERENCES symbols(id) ON DELETE SET NULL,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    resolved_target_id  TEXT NOT NULL DEFAULT '',
+    resolver_name       TEXT NOT NULL DEFAULT '',
+    metadata_json       TEXT NOT NULL DEFAULT '{}',
+    diagnostics_json    TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
 # ---------------------------------------------------------------------------
 # Indexes
 # ---------------------------------------------------------------------------
@@ -75,6 +97,11 @@ _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_rels_type             ON relationships(type);",
     "CREATE INDEX IF NOT EXISTS idx_rels_source_type      ON relationships(source_id, type);",
     "CREATE INDEX IF NOT EXISTS idx_rels_target_type      ON relationships(target_id, type);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_file_id          ON relationship_facts(file_id);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_source_symbol    ON relationship_facts(source_symbol_id);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_type             ON relationship_facts(fact_type);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_status           ON relationship_facts(status);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_type_status      ON relationship_facts(fact_type, status);",
 ]
 
 # ---------------------------------------------------------------------------
@@ -88,7 +115,7 @@ CREATE TABLE IF NOT EXISTS node_walk_meta (
 );
 """
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +134,7 @@ def initialize(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_FILES)
     conn.execute(_CREATE_SYMBOLS)
     conn.execute(_CREATE_RELATIONSHIPS)
+    conn.execute(_CREATE_RELATIONSHIP_FACTS)
     conn.execute(_CREATE_META)
 
     for idx_sql in _CREATE_INDEXES:

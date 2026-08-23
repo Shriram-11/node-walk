@@ -8,9 +8,10 @@ query engine and indexer decoupled from any concrete technology.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
-from node_walk.ir.models import AnalysisResult, FileInfo, Relationship, Symbol
-from node_walk.ir.enums import RelationshipType, ResolutionStatus
+from node_walk.ir.enums import FactStatus, FactType, RelationshipType, ResolutionStatus
+from node_walk.ir.models import AnalysisResult, FileInfo, Relationship, RelationshipFact, Symbol
 
 
 class GraphStore(ABC):
@@ -38,6 +39,29 @@ class GraphStore(ABC):
         self, rel_id: str, target_id: str, resolution: ResolutionStatus
     ) -> None:
         """Update a relationship's resolved target and status (cross-file resolution pass)."""
+        ...
+
+    @abstractmethod
+    def store_fact(self, fact: RelationshipFact) -> None:
+        """Persist a single relationship fact."""
+        ...
+
+    @abstractmethod
+    def store_facts(self, facts: list[RelationshipFact]) -> None:
+        """Persist multiple relationship facts."""
+        ...
+
+    @abstractmethod
+    def update_relationship_fact(
+        self,
+        fact_id: str,
+        *,
+        status: FactStatus,
+        resolved_target_id: str = "",
+        resolver_name: str = "",
+        diagnostics: dict[str, Any] | None = None,
+    ) -> None:
+        """Update the resolution state for a stored relationship fact."""
         ...
 
     # --- Read operations ----------------------------------------------------
@@ -77,6 +101,13 @@ class GraphStore(ABC):
 
     @abstractmethod
     def get_all_unresolved_relationships(self) -> list[Relationship]: ...
+
+    @abstractmethod
+    def get_relationship_facts(
+        self,
+        fact_type: FactType | None = None,
+        status: FactStatus | None = None,
+    ) -> list[RelationshipFact]: ...
 
     # --- Stats --------------------------------------------------------------
 

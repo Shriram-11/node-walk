@@ -59,3 +59,22 @@ class ResolutionStatus(StrEnum):
     RESOLVED = "resolved"       # statically certain
     PROBABLE = "probable"       # high-confidence heuristic
     UNRESOLVED = "unresolved"   # could not determine target
+
+
+class FactType(StrEnum):
+    """Kinds of raw semantic observations captured before resolution."""
+
+    CALL = "CALL"
+    IMPORT = "IMPORT"
+    INHERITANCE = "INHERITANCE"
+    REFERENCE = "REFERENCE"
+
+
+class FactStatus(StrEnum):
+    """Lifecycle state for a stored relationship fact."""
+
+    PENDING = "pending"
+    RESOLVED = "resolved"
+    PROBABLE = "probable"
+    UNRESOLVED = "unresolved"
+    IGNORED = "ignored"
