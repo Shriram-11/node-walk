@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2026-08-23
 ### Added
 - **`node-walk serve` command**: Launches an embedded local HTTP server (`localhost:7777` by default) and auto-opens the browser to the interactive graph explorer. Accepts `--port`, `--host`, and `--no-open` flags.
 - **Graph Explorer UI** (`src/node_walk/web/`): A single-page browser application (no build step, no npm) that renders the full code graph using Cytoscape.js (CDN):
