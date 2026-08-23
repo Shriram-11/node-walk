@@ -1,48 +1,40 @@
 name: Release & Publish
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to publish (e.g. 0.2.1, patch, minor, major) — leave blank if tag was pushed"
-        required: false
-        default: ""
-        type: string
+      bump_type:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - "patch"
+          - "minor"
+          - "major"
       target:
-        description: "Target repository to publish to"
+        description: "Publish destination"
         required: true
         default: "pypi"
         type: choice
         options:
           - "pypi"
           - "testpypi"
-      create_github_release:
-        description: "Create a GitHub Release with built distribution assets"
-        required: false
-        default: true
-        type: boolean
-      is_prerelease:
-        description: "Mark GitHub Release as pre-release"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
   id-token: write
 
 jobs:
-  build:
-    name: Build source and binary distribution
+  release:
+    name: Auto-bump, Tag, Build & Publish
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,111 +46,88 @@ jobs:
           python -m pip install --upgrade pip
           pip install build hatchling hatch-vcs
 
-      - name: Determine & Tag Version (if workflow_dispatch input provided)
-        id: set_version
+      - name: Calculate Version, Update Changelog & Create Tag
+        id: auto_tag
         run: |
           python - << 'EOF'
-          import os, re, subprocess
+          import os, re, subprocess, datetime
 
-          tag = os.environ.get("GITHUB_REF_NAME", "")
-          input_ver = os.environ.get("INPUT_VERSION", "").strip()
+          bump = os.environ.get("INPUT_BUMP_TYPE", "patch")
 
-          # Fetch latest release tag from git
+          # 1. Find latest git tag
           try:
               latest_tag = subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], text=True).strip()
           except Exception:
               latest_tag = "v0.1.0"
 
           current_ver = latest_tag.lstrip("v")
-          target_ver = current_ver
+          parts = [int(p) for p in re.findall(r'\d+', current_ver)]
+          while len(parts) < 3:
+              parts.append(0)
 
-          if input_ver:
-              if input_ver in ("patch", "minor", "major"):
-                  parts = [int(p) for p in re.findall(r'\d+', current_ver)]
-                  while len(parts) < 3:
-                      parts.append(0)
-                  if input_ver == "major":
-                      target_ver = f"{parts[0]+1}.0.0"
-                  elif input_ver == "minor":
-                      target_ver = f"{parts[0]}.{parts[1]+1}.0"
-                  elif input_ver == "patch":
-                      target_ver = f"{parts[0]}.{parts[1]}.{parts[2]+1}"
-              else:
-                  target_ver = input_ver.lstrip("v")
-              
-              new_tag = f"v{target_ver}"
-              print(f"Creating and pushing new Git tag: {new_tag}")
-              subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-              subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
-              subprocess.run(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"], check=True)
-              # Push tag back to repository
-              remote_url = f"https://x-access-token:{os.environ['GITHUB_TOKEN']}@github.com/{os.environ['GITHUB_REPOSITORY']}.git"
-              subprocess.run(["git", "push", remote_url, new_tag], check=True)
-          elif os.environ.get("GITHUB_REF_TYPE") == "tag" and tag.startswith("v"):
-              target_ver = tag.lstrip("v")
+          # 2. Calculate target version
+          if bump == "major":
+              target_ver = f"{parts[0]+1}.0.0"
+          elif bump == "minor":
+              target_ver = f"{parts[0]}.{parts[1]+1}.0"
+          else:
+              target_ver = f"{parts[0]}.{parts[1]}.{parts[2]+1}"
 
-          print(f"Target package release version: {target_ver}")
+          new_tag = f"v{target_ver}"
+          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+          print(f"Release version: {target_ver} (from {current_ver} via {bump} bump)")
+
+          # 3. Update CHANGELOG.md automatically
+          changelog_path = "CHANGELOG.md"
+          if os.path.exists(changelog_path):
+              with open(changelog_path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              replacement = f"## [Unreleased]\n\n---\n\n## [{target_ver}] - {today}"
+              if "## [Unreleased]" in content:
+                  new_content = content.replace("## [Unreleased]", replacement, 1)
+                  with open(changelog_path, "w", encoding="utf-8") as f:
+                      f.write(new_content)
+                  print(f"Updated {changelog_path} with header [{target_ver}] - {today}")
+
+          # 4. Configure git bot, commit changelog, and push tag + commit
+          subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+          subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+
+          # Commit CHANGELOG update
+          subprocess.run(["git", "add", "CHANGELOG.md"], check=True)
+          subprocess.run(["git", "commit", "-m", f"chore(release): release {new_tag} [skip ci]"], check=True)
+
+          # Tag the commit
+          subprocess.run(["git", "tag", "-a", new_tag, "-m", f"Release {new_tag}"], check=True)
+
+          # Push commit and tag back to repository
+          branch = os.environ.get("GITHUB_REF_NAME", "main")
+          remote_url = f"https://x-access-token:{os.environ['GITHUB_TOKEN']}@github.com/{os.environ['GITHUB_REPOSITORY']}.git"
+          subprocess.run(["git", "push", remote_url, f"HEAD:{branch}"], check=True)
+          subprocess.run(["git", "push", remote_url, new_tag], check=True)
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"version={target_ver}\n")
+              out.write(f"tag={new_tag}\n")
           EOF
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUMP_TYPE: ${{ inputs.bump_type }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build package distributions (sdist & wheel)
+      - name: Build package distributions
         run: python -m build
 
-      - name: Store distribution packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-  publish:
-    name: Publish distribution
-    needs: [build]
-    runs-on: ubuntu-latest
-    environment:
-      name: ${{ inputs.target || 'pypi' }}
-      url: ${{ (inputs.target == 'testpypi') && 'https://test.pypi.org/p/node-walk' || 'https://pypi.org/p/node-walk' }}
-
-    steps:
-      - name: Download distribution packages
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to PyPI / TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: ${{ (inputs.target == 'testpypi') && 'https://test.pypi.org/legacy/' || '' }}
           skip-existing: true
 
-  github-release:
-    name: Create GitHub Release
-    needs: [build]
-    if: ${{ inputs.create_github_release != false }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Download distribution packages
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Extract package version from distribution filename
-        id: get_version
-        run: |
-          FILE=$(ls dist/*.whl | head -n 1)
-          VERSION=$(basename "$FILE" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._]*)-.*/\1/')
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.get_version.outputs.version }}
+          tag_name: ${{ steps.auto_tag.outputs.tag }}
           files: dist/*
           generate_release_notes: true
-          prerelease: ${{ inputs.is_prerelease || false }}
