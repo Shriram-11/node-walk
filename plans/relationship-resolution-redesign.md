@@ -6,6 +6,59 @@ Local-first, correctness-first, incremental migration.
 
 ---
 
+## 0. Handoff Status
+
+This section is the quick-start handoff summary for parallel implementation work.
+
+### Completed So Far
+
+The following work has already been implemented in the repo:
+
+- fact enums and models were added
+- `relationship_facts` SQLite storage was added
+- storage APIs for persisting and updating raw facts were added
+- `AnalysisResult` now supports `relationship_facts`
+- the Python analyzer now returns raw relationship facts
+- the Python visitor now emits raw call facts
+- class methods are pre-registered before method-body analysis
+- same-class forward references like `self.method_b()` can now resolve better during extraction
+- tests were updated and are passing for storage, query engine, and Python analyzer
+
+### Confirmed Decisions
+
+These decisions were explicitly discussed and should be treated as settled unless a new decision is made:
+
+- old edge-emission behavior can be changed or removed if needed
+- backward compatibility with the old inline semantic-resolution approach is not required if it blocks a cleaner resolver pipeline
+- legacy `CALLS` edge emission inside the Python visitor is transitional, not final architecture
+- it is acceptable to replace old resolution paths rather than preserve them indefinitely
+
+### Current Transitional State
+
+The codebase is currently in a mixed migration state:
+
+- raw call facts are now extracted and stored
+- legacy `CALLS` relationships are still emitted from the visitor for compatibility
+- some in-file resolution still happens during extraction
+- the dedicated resolver/materialization pipeline has not been implemented yet
+
+This means consumers still work, but the architecture is intentionally temporary until the resolver pipeline takes over semantic edge creation.
+
+### Next Recommended Work
+
+The highest-priority next step is:
+
+- build the resolver pipeline
+- read pending call facts from storage
+- materialize `CALLS` relationships from resolver output
+- then remove legacy inline call-resolution logic from the visitor
+
+### Guidance for Subagents
+
+Agents should treat this plan as the source of truth for target architecture, but should not preserve transitional code paths unless they still serve migration safety.
+
+---
+
 ## 1. Why This Plan Exists
 
 The current graph pipeline mixes together three different concerns:
