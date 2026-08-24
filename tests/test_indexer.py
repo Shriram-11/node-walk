@@ -24,7 +24,8 @@ def test_indexer_materializes_class_member_call_from_facts(tmp_path):
             if s.qualified_name == "services.UserService._notify"
         )
 
-        calls = store.get_relationships_from(create_user.id, RelationshipType.CALLS)
+        calls = store.get_relationships_from(
+            create_user.id, RelationshipType.CALLS)
         assert any(rel.target_id == notify.id for rel in calls)
 
         notify_facts = [
@@ -60,12 +61,14 @@ def run():
         stats = Indexer(store).index(project)
         assert stats.files_analyzed == 1
 
-        run_sym = next(s for s in store.get_all_symbols() if s.qualified_name == "service.run")
+        run_sym = next(s for s in store.get_all_symbols()
+                       if s.qualified_name == "service.run")
         create_user = next(
             s for s in store.get_all_symbols() if s.qualified_name == "service.UserService.create_user"
         )
 
-        calls = store.get_relationships_from(run_sym.id, RelationshipType.CALLS)
+        calls = store.get_relationships_from(
+            run_sym.id, RelationshipType.CALLS)
         assert any(rel.target_id == create_user.id for rel in calls)
     finally:
         store.close()
@@ -100,7 +103,49 @@ def get_transaction_by_id(session, service: TransactionService):
             s for s in store.get_all_symbols() if s.qualified_name == "controller.TransactionService.get_by_id"
         )
 
-        calls = store.get_relationships_from(controller.id, RelationshipType.CALLS)
+        calls = store.get_relationships_from(
+            controller.id, RelationshipType.CALLS)
         assert any(rel.target_id == service_method.id for rel in calls)
+    finally:
+        store.close()
+
+
+def test_indexer_resolves_dotted_receiver_method_via_attribute_binding(tmp_path):
+    project = tmp_path / "attribute_project"
+    project.mkdir()
+    (project / "service.py").write_text(
+        """
+class TransactionRepository:
+    def get_by_id(self, txn_id):
+        return txn_id
+
+
+class TransactionService:
+    def __init__(self, repository: TransactionRepository):
+        self.repository = repository
+
+    def get_transaction(self, txn_id):
+        return self.repository.get_by_id(txn_id)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "graph4.db"
+    store = SQLiteGraphStore(db_path)
+    try:
+        Indexer(store).index(project)
+
+        service_method = next(
+            s for s in store.get_all_symbols()
+            if s.qualified_name == "service.TransactionService.get_transaction"
+        )
+        repository_method = next(
+            s for s in store.get_all_symbols()
+            if s.qualified_name == "service.TransactionRepository.get_by_id"
+        )
+
+        calls = store.get_relationships_from(
+            service_method.id, RelationshipType.CALLS)
+        assert any(rel.target_id == repository_method.id for rel in calls)
     finally:
         store.close()

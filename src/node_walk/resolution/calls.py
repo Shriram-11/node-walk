@@ -7,19 +7,19 @@ from node_walk.resolution.base import FactResolver, ResolutionResult
 
 
 _BUILTINS = {
-    "str", "int", "len", "isinstance", "print", "super", "range", "type", 
-    "list", "dict", "set", "tuple", "bool", "float", "enumerate", "zip", 
-    "map", "filter", "sorted", "reversed", "getattr", "setattr", "hasattr", 
-    "property", "staticmethod", "classmethod", "object", "repr", "abs", 
-    "min", "max", "open", "iter", "next", "any", "all", "vars", "dir", 
+    "str", "int", "len", "isinstance", "print", "super", "range", "type",
+    "list", "dict", "set", "tuple", "bool", "float", "enumerate", "zip",
+    "map", "filter", "sorted", "reversed", "getattr", "setattr", "hasattr",
+    "property", "staticmethod", "classmethod", "object", "repr", "abs",
+    "min", "max", "open", "iter", "next", "any", "all", "vars", "dir",
     "id", "hex", "oct", "bin", "chr", "ord", "hash", "callable", "format", "round"
 }
 
 _COMMON_METHODS = {
-    "get", "append", "pop", "items", "keys", "values", "strip", "split", 
-    "join", "encode", "decode", "format", "replace", "lower", "upper", 
-    "read", "write", "close", "rstrip", "lstrip", "startswith", "endswith", 
-    "update", "extend", "remove", "insert", "copy", "clear", "add", "discard", 
+    "get", "append", "pop", "items", "keys", "values", "strip", "split",
+    "join", "encode", "decode", "format", "replace", "lower", "upper",
+    "read", "write", "close", "rstrip", "lstrip", "startswith", "endswith",
+    "update", "extend", "remove", "insert", "copy", "clear", "add", "discard",
     "isdigit", "isupper", "islower"
 }
 
@@ -52,7 +52,7 @@ class NoiseFilterCallResolver(FactResolver):
                 status=FactStatus.IGNORED,
                 diagnostics={"reason": "common_untyped_method"}
             )
-            
+
         # Ignore stdlib modules if recognizable
         if fact.receiver_text in ("os.path", "json", "logging", "sys", "re", "datetime"):
             return ResolutionResult(
@@ -99,7 +99,8 @@ class ClassMemberCallResolver(FactResolver):
             return ResolutionResult(
                 status=FactStatus.RESOLVED,
                 resolved_target_id=candidates[0].id,
-                diagnostics={"strategy": "class_member", "class": parent_symbol.name}
+                diagnostics={"strategy": "class_member",
+                             "class": parent_symbol.name}
             )
 
         # If we didn't find it, it might be inherited or not indexed yet. Let's not fail it permanently.
@@ -132,20 +133,21 @@ class InFileCallResolver(FactResolver):
 
         if not candidates:
             return None
-            
+
         if len(candidates) == 1:
             return ResolutionResult(
                 status=FactStatus.RESOLVED,
                 resolved_target_id=candidates[0].id,
                 diagnostics={"strategy": "in_file_exact"}
             )
-            
+
         # Multiple candidates in the same file (e.g. overloaded or same name in different classes)
         # Without deeper scope analysis, we mark it PROBABLE with the first candidate.
         return ResolutionResult(
             status=FactStatus.PROBABLE,
             resolved_target_id=candidates[0].id,
-            diagnostics={"strategy": "in_file_ambiguous", "candidates": len(candidates)}
+            diagnostics={"strategy": "in_file_ambiguous",
+                         "candidates": len(candidates)}
         )
 
 
@@ -167,24 +169,24 @@ class ConstructorCallResolver(FactResolver):
         # But wait, if those didn't resolve it, we can also look for a globally unique class.
         # If it is already resolved to a CLASS, we remap it.
         # But `resolve` is called on facts that are PENDING.
-        
+
         # Let's see if there is exactly one CLASS with this name globally.
         # (This acts as a fallback for cross-file without imports for now).
         if fact.receiver_text:
             # We only handle ClassName() right now, or maybe module.ClassName()
             pass
-            
+
         candidates = [
             s for s in store.find_symbols_by_name(fact.simple_name, exact=True)
             if s.kind == SymbolKind.CLASS
         ]
-        
+
         if len(candidates) == 1:
             class_sym = candidates[0]
             # Try to find __init__
             init_qname = f"{class_sym.qualified_name}.__init__"
             init_methods = store.find_symbols_by_qualified_name(init_qname)
-            
+
             if init_methods:
                 return ResolutionResult(
                     status=FactStatus.RESOLVED,
@@ -198,13 +200,19 @@ class ConstructorCallResolver(FactResolver):
                     resolved_target_id=class_sym.id,
                     diagnostics={"strategy": "constructor_class_only"}
                 )
-        
+
         return None
 
 
 class CrossFileCallResolver(FactResolver):
     """
-    Resolves calls across files by utilizing IMPORT facts to build a namespace map.
+    Resolves calls across files by binding receivers, then looking up members.
+
+    A call such as ``self.repository.get_by_id()`` is resolved in two steps:
+    first ``self.repository`` is mapped to its bound symbol by a resolved
+    BINDING fact, then ``get_by_id`` is looked up on that symbol's qualified
+    name. The same path works for local variables, parameters, and imported
+    module or class receivers.
     """
 
     @property
@@ -215,14 +223,46 @@ class CrossFileCallResolver(FactResolver):
         if fact.fact_type != FactType.CALL:
             return None
 
-        # 1. Fetch import facts for the same file that are RESOLVED
-        # (This is slightly inefficient to do per-fact instead of batch, but okay for V1)
+        # 1. Fetch resolved imports and bindings for this call's file/scope.
         import_facts = store.get_relationship_facts(
             fact_type=FactType.IMPORT, status=FactStatus.RESOLVED
         )
         file_imports = [f for f in import_facts if f.file_id == fact.file_id]
+        binding_facts = store.get_relationship_facts(
+            fact_type=FactType.BINDING, status=FactStatus.RESOLVED
+        )
+        caller = store.get_symbol(fact.source_symbol_id)
+        enclosing_class_id = ""
+        current_id = caller.parent_id if caller else ""
+        while current_id:
+            current = store.get_symbol(current_id)
+            if not current:
+                break
+            if current.kind in (SymbolKind.CLASS, SymbolKind.INTERFACE):
+                enclosing_class_id = current.id
+                break
+            current_id = current.parent_id or ""
 
-        # 2. Build a local alias -> target_id mapping based on imports
+        binding_source_ids = {fact.source_symbol_id}
+        if enclosing_class_id:
+            for candidate in store.get_all_symbols():
+                current_id = candidate.parent_id
+                while current_id:
+                    current = store.get_symbol(current_id)
+                    if not current:
+                        break
+                    if current.id == enclosing_class_id:
+                        binding_source_ids.add(candidate.id)
+                        break
+                    current_id = current.parent_id or ""
+        scope_bindings = [
+            f for f in binding_facts
+            if f.file_id == fact.file_id
+            and f.source_symbol_id in binding_source_ids
+            and f.resolved_target_id
+        ]
+
+        # 2. Build local namespace maps from imports and receiver bindings.
         import_map: dict[str, str] = {}
         for imp in file_imports:
             # simple_name of the import fact is the imported name
@@ -231,39 +271,27 @@ class CrossFileCallResolver(FactResolver):
             if imp.resolved_target_id:
                 import_map[imp.simple_name] = imp.resolved_target_id
 
-        # 3. Check if the receiver or simple name matches an imported symbol
+        binding_map = {
+            binding.raw_text: binding.resolved_target_id for binding in scope_bindings}
+
+        # 3. Resolve the receiver, then resolve its member.
         match_id = None
-        receiver_binding = fact.metadata.get("receiver_binding", "")
-        
-        # Case A: `adapter.chat()` where `adapter` is imported
-        if fact.receiver_text and fact.receiver_text in import_map:
-            # We know the receiver's ID. Now we need to find `fact.simple_name` inside that receiver.
-            receiver_id = import_map[fact.receiver_text]
+        receiver_id = binding_map.get(fact.receiver_text, "")
+        if not receiver_id:
+            receiver_id = import_map.get(fact.receiver_text, "")
+
+        if receiver_id:
             receiver_sym = store.get_symbol(receiver_id)
             if receiver_sym:
-                # Find the method/function inside the receiver module/class
                 target_qname = f"{receiver_sym.qualified_name}.{fact.simple_name}"
                 candidates = store.find_symbols_by_qualified_name(target_qname)
                 if candidates:
                     match_id = candidates[0].id
 
-        # Case A2: `adapter.chat()` where `adapter` was bound from `adapter = OllamaAdapter(...)`
-        elif fact.receiver_text and receiver_binding:
-            binding_simple = receiver_binding.split(".")[-1]
-            class_candidates = [
-                s for s in store.find_symbols_by_name(binding_simple, exact=True)
-                if s.kind == SymbolKind.CLASS
-            ]
-            if len(class_candidates) == 1:
-                target_qname = f"{class_candidates[0].qualified_name}.{fact.simple_name}"
-                candidates = store.find_symbols_by_qualified_name(target_qname)
-                if candidates:
-                    match_id = candidates[0].id
-
-        # Case B: `chat()` where `chat` is imported directly
+        # Case B: `chat()` where `chat` is imported directly.
         elif not fact.receiver_text and fact.simple_name in import_map:
             match_id = import_map[fact.simple_name]
-            
+
         if match_id:
             return ResolutionResult(
                 status=FactStatus.RESOLVED,
@@ -276,10 +304,10 @@ class CrossFileCallResolver(FactResolver):
         all_matches = store.find_symbols_by_name(fact.simple_name, exact=True)
         # Filter out builtins or local variables (prefer functions, methods, classes)
         valid_matches = [
-            m for m in all_matches 
+            m for m in all_matches
             if m.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD, SymbolKind.CLASS)
         ]
-        
+
         # If the receiver text is present, filter by matching qualified name suffix
         if fact.receiver_text:
             expected_suffix = f"{fact.receiver_text}.{fact.simple_name}"
@@ -287,12 +315,13 @@ class CrossFileCallResolver(FactResolver):
                 m for m in valid_matches
                 if m.qualified_name.endswith(f".{expected_suffix}")
             ]
-            
+
         if len(valid_matches) == 1:
             return ResolutionResult(
                 status=FactStatus.PROBABLE,
                 resolved_target_id=valid_matches[0].id,
-                diagnostics={"strategy": "cross_file_global_fallback", "candidates": 1}
+                diagnostics={
+                    "strategy": "cross_file_global_fallback", "candidates": 1}
             )
 
         return ResolutionResult(

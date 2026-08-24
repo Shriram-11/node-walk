@@ -479,8 +479,9 @@ class SymbolCollector:
 
         if body_node:
             self._scope.push(func_sym)
-            self._local_bindings[func_sym.id] = self._collect_parameter_bindings(params_node, func_sym)
-            self._local_bindings[func_sym.id].update(self._collect_local_bindings(body_node, func_sym))
+            param_bindings = self._collect_parameter_bindings(params_node, func_sym)
+            local_bindings = self._collect_local_bindings(body_node, func_sym, param_bindings)
+            self._local_bindings[func_sym.id] = {**param_bindings, **local_bindings}
             self._collect_calls(body_node, func_sym)
             for child in body_node.children:
                 if child.type in ("function_definition", "decorated_definition"):
@@ -695,8 +696,13 @@ class SymbolCollector:
             current = parent
         return None
 
-    def _collect_local_bindings(self, node: Node, func_sym: Symbol) -> dict[str, str]:
-        bindings: dict[str, str] = {}
+    def _collect_local_bindings(
+        self,
+        node: Node,
+        func_sym: Symbol,
+        seed_bindings: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        bindings: dict[str, str] = dict(seed_bindings or {})
         self._walk_assignment_bindings(node, bindings, func_sym)
         return bindings
 
@@ -751,33 +757,58 @@ class SymbolCollector:
             self._walk_assignment_bindings(child, bindings, func_sym)
 
     def _capture_assignment_binding(self, node: Node, bindings: dict[str, str], func_sym: Symbol) -> None:
-        targets = self._extract_assignment_targets(node)
-        if len(targets) != 1:
+        target_expr = self._extract_assignment_target_expr(node)
+        if not target_expr:
             return
 
-        call_node = next((child for child in node.children if child.type == "call"), None)
-        if not call_node:
+        inferred_hint = self._infer_assignment_binding_hint(node, bindings)
+        if not inferred_hint:
             return
 
-        func_node = call_node.child_by_field_name("function")
-        if not func_node:
-            return
-
-        bindings[targets[0]] = node_text(func_node, self.source)
+        bindings[target_expr] = inferred_hint
         self.relationship_facts.append(
             RelationshipFact(
                 file_id=self.file_info.id,
                 source_symbol_id=func_sym.id,
                 fact_type=FactType.BINDING,
-                raw_text=targets[0],
-                simple_name=targets[0].split(".")[-1],
-                qualified_hint=node_text(func_node, self.source),
+                raw_text=target_expr,
+                simple_name=target_expr.split(".")[-1],
+                receiver_text=".".join(target_expr.split(".")[:-1]),
+                qualified_hint=inferred_hint,
                 source_location=SourceLocation(file_id=self.file_info.id, line=start_line(node)),
                 metadata={"binding_type": "assignment"},
             )
         )
 
     def _resolve_receiver_binding(self, caller_id: str, receiver_text: str) -> str:
-        if not receiver_text or "." in receiver_text:
+        if not receiver_text:
             return ""
         return self._local_bindings.get(caller_id, {}).get(receiver_text, "")
+
+    def _extract_assignment_target_expr(self, node: Node) -> str:
+        for child in node.children:
+            if child.type == "=":
+                break
+            if child.type in {"identifier", "attribute"}:
+                text = node_text(child, self.source).strip()
+                if text:
+                    return text
+        return ""
+
+    def _infer_assignment_binding_hint(self, node: Node, bindings: dict[str, str]) -> str:
+        rhs_started = False
+        rhs_identifier = ""
+        for child in node.children:
+            if rhs_started:
+                if child.type == "call":
+                    func_node = child.child_by_field_name("function")
+                    if func_node:
+                        return node_text(func_node, self.source)
+                if child.type in {"identifier", "attribute"} and not rhs_identifier:
+                    rhs_identifier = node_text(child, self.source).strip()
+            elif child.type == "=":
+                rhs_started = True
+
+        if rhs_identifier:
+            return bindings.get(rhs_identifier, "")
+        return ""

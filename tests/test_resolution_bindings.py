@@ -2,6 +2,7 @@ import pytest
 
 from node_walk.ir.enums import FactStatus, FactType, Language, SymbolKind
 from node_walk.ir.models import AnalysisResult, FileInfo, RelationshipFact, Symbol
+from node_walk.analysis.python import PythonAnalyzer
 from node_walk.resolution.bindings import BindingResolver
 from node_walk.storage.sqlite_store import SQLiteGraphStore
 
@@ -62,3 +63,28 @@ def test_binding_resolver_local_match(store):
     assert res is not None
     assert res.status == FactStatus.RESOLVED
     assert res.resolved_target_id == target_sym.id
+
+
+def test_python_analyzer_emits_self_attribute_binding_fact():
+    source = """
+class TransactionRepository:
+    pass
+
+
+class TransactionService:
+    def __init__(self, repository: TransactionRepository):
+        self.repository = repository
+""".strip()
+
+    finfo = FileInfo(path="service.py", language=Language.PYTHON)
+    result = PythonAnalyzer().analyze(finfo, source)
+
+    binding_facts = [f for f in result.relationship_facts if f.fact_type == FactType.BINDING]
+    assert any(
+        f.raw_text == "repository" and f.qualified_hint == "TransactionRepository"
+        for f in binding_facts
+    )
+    assert any(
+        f.raw_text == "self.repository" and f.qualified_hint == "TransactionRepository"
+        for f in binding_facts
+    )
