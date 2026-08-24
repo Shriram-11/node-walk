@@ -278,6 +278,20 @@ class SymbolCollector:
                 metadata={"target_name": target_name},
             )
         )
+        self.relationship_facts.append(
+            RelationshipFact(
+                file_id=self.file_info.id,
+                source_symbol_id=source_sym.id,
+                fact_type=FactType.IMPORT,
+                raw_text=target_name,
+                simple_name=target_name.split(".")[-1],
+                receiver_text=".".join(target_name.split(".")[:-1]),
+                qualified_hint=target_name,
+                source_location=loc,
+                scope_symbol_id=source_sym.id,
+                metadata={"target_name": target_name},
+            )
+        )
 
     # ------------------------------------------------------------------
     # Classes
@@ -318,14 +332,18 @@ class SymbolCollector:
         for base_name in bases:
             if base_name in _ABC_BASES | _PROTOCOL_BASES:
                 continue
-            rel_type = RelationshipType.IMPLEMENTS if is_interface else RelationshipType.EXTENDS
-            self.relationships.append(
-                Relationship(
-                    source_id=class_sym.id,
-                    target_id="",
-                    type=rel_type,
-                    resolution=ResolutionStatus.UNRESOLVED,
-                    metadata={"target_name": base_name},
+            is_implements = is_interface
+            self.relationship_facts.append(
+                RelationshipFact(
+                    file_id=self.file_info.id,
+                    source_symbol_id=class_sym.id,
+                    fact_type=FactType.INHERITANCE,
+                    raw_text=base_name,
+                    simple_name=base_name.split(".")[-1],
+                    receiver_text=".".join(base_name.split(".")[:-1]),
+                    qualified_hint=base_name,
+                    source_location=SourceLocation(file_id=self.file_info.id, line=start_line(node)),
+                    metadata={"is_implements": is_implements, "target_name": base_name},
                 )
             )
 

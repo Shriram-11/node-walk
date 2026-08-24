@@ -200,3 +200,89 @@ class ConstructorCallResolver(FactResolver):
                 )
         
         return None
+
+
+class CrossFileCallResolver(FactResolver):
+    """
+    Resolves calls across files by utilizing IMPORT facts to build a namespace map.
+    """
+
+    @property
+    def name(self) -> str:
+        return "CrossFileCallResolver"
+
+    def resolve(self, store: GraphStore, fact: RelationshipFact) -> ResolutionResult | None:
+        if fact.fact_type != FactType.CALL:
+            return None
+
+        # 1. Fetch import facts for the same file that are RESOLVED
+        # (This is slightly inefficient to do per-fact instead of batch, but okay for V1)
+        import_facts = store.get_relationship_facts(
+            fact_type=FactType.IMPORT, status=FactStatus.RESOLVED
+        )
+        file_imports = [f for f in import_facts if f.file_id == fact.file_id]
+
+        # 2. Build a local alias -> target_id mapping based on imports
+        import_map: dict[str, str] = {}
+        for imp in file_imports:
+            # simple_name of the import fact is the imported name
+            # e.g., `from jarvis.model import adapter` -> simple_name = `adapter`
+            # For now we map the simple_name to the resolved target ID
+            if imp.resolved_target_id:
+                import_map[imp.simple_name] = imp.resolved_target_id
+
+        # 3. Check if the receiver or simple name matches an imported symbol
+        match_id = None
+        
+        # Case A: `adapter.chat()` where `adapter` is imported
+        if fact.receiver_text and fact.receiver_text in import_map:
+            # We know the receiver's ID. Now we need to find `fact.simple_name` inside that receiver.
+            receiver_id = import_map[fact.receiver_text]
+            receiver_sym = store.get_symbol(receiver_id)
+            if receiver_sym:
+                # Find the method/function inside the receiver module/class
+                target_qname = f"{receiver_sym.qualified_name}.{fact.simple_name}"
+                candidates = store.find_symbols_by_qualified_name(target_qname)
+                if candidates:
+                    match_id = candidates[0].id
+
+        # Case B: `chat()` where `chat` is imported directly
+        elif not fact.receiver_text and fact.simple_name in import_map:
+            match_id = import_map[fact.simple_name]
+            
+        if match_id:
+            return ResolutionResult(
+                status=FactStatus.RESOLVED,
+                resolved_target_id=match_id,
+                diagnostics={"strategy": "cross_file_import_aware"}
+            )
+
+        # 4. Fallback: Unambiguous global match
+        # If we couldn't resolve via imports, maybe the simple name is completely unique across the repo?
+        all_matches = store.find_symbols_by_name(fact.simple_name, exact=True)
+        # Filter out builtins or local variables (prefer functions, methods, classes)
+        valid_matches = [
+            m for m in all_matches 
+            if m.kind in (SymbolKind.FUNCTION, SymbolKind.METHOD, SymbolKind.CLASS)
+        ]
+        
+        # If the receiver text is present, filter by matching qualified name suffix
+        if fact.receiver_text:
+            expected_suffix = f"{fact.receiver_text}.{fact.simple_name}"
+            valid_matches = [
+                m for m in valid_matches
+                if m.qualified_name.endswith(f".{expected_suffix}")
+            ]
+            
+        if len(valid_matches) == 1:
+            return ResolutionResult(
+                status=FactStatus.PROBABLE,
+                resolved_target_id=valid_matches[0].id,
+                diagnostics={"strategy": "cross_file_global_fallback", "candidates": 1}
+            )
+
+        return ResolutionResult(
+            status=FactStatus.UNRESOLVED,
+            diagnostics={"strategy": "cross_file_not_found"}
+        )
+

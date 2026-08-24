@@ -25,7 +25,9 @@ from node_walk.resolution.calls import (
     ClassMemberCallResolver,
     InFileCallResolver,
     ConstructorCallResolver,
+    CrossFileCallResolver,
 )
+from node_walk.resolution.imports import ImportResolver
 
 
 class Indexer:
@@ -118,7 +120,14 @@ class Indexer:
         Run semantic resolution passes on raw facts, and materialize the results
         into the main relationships table.
         """
-        # We start with CALL facts
+        # First, run ImportResolver on IMPORT facts
+        import_facts = self._store.get_relationship_facts(
+            fact_type=FactType.IMPORT, status=FactStatus.PENDING
+        )
+        import_resolver = ImportResolver()
+        total_resolved = import_resolver.run(self._store, import_facts)
+
+        # Then, run CALL resolvers
         call_facts = self._store.get_relationship_facts(
             fact_type=FactType.CALL, status=FactStatus.PENDING
         )
@@ -128,9 +137,8 @@ class Indexer:
             InFileCallResolver(),
             ClassMemberCallResolver(),
             ConstructorCallResolver(),
+            CrossFileCallResolver(),
         ]
-
-        total_resolved = 0
         for resolver in resolvers:
             count = resolver.run(self._store, call_facts)
             total_resolved += count
