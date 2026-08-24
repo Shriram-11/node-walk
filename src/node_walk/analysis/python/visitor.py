@@ -479,7 +479,8 @@ class SymbolCollector:
 
         if body_node:
             self._scope.push(func_sym)
-            self._local_bindings[func_sym.id] = self._collect_local_bindings(body_node)
+            self._local_bindings[func_sym.id] = self._collect_parameter_bindings(params_node)
+            self._local_bindings[func_sym.id].update(self._collect_local_bindings(body_node))
             self._collect_calls(body_node, func_sym)
             for child in body_node.children:
                 if child.type in ("function_definition", "decorated_definition"):
@@ -697,6 +698,27 @@ class SymbolCollector:
     def _collect_local_bindings(self, node: Node) -> dict[str, str]:
         bindings: dict[str, str] = {}
         self._walk_assignment_bindings(node, bindings)
+        return bindings
+
+    def _collect_parameter_bindings(self, params_node: Node | None) -> dict[str, str]:
+        bindings: dict[str, str] = {}
+        if not params_node:
+            return bindings
+
+        for child in params_node.children:
+            if child.type not in {"typed_parameter", "typed_default_parameter"}:
+                continue
+
+            identifier = next((c for c in child.children if c.type == "identifier"), None)
+            type_node = next((c for c in child.children if c.type == "type"), None)
+            if not identifier or not type_node:
+                continue
+
+            param_name = node_text(identifier, self.source)
+            type_name = node_text(type_node, self.source)
+            if param_name and type_name:
+                bindings[param_name] = type_name
+
         return bindings
 
     def _walk_assignment_bindings(self, node: Node, bindings: dict[str, str]) -> None:

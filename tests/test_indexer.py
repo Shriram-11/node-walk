@@ -69,3 +69,38 @@ def run():
         assert any(rel.target_id == create_user.id for rel in calls)
     finally:
         store.close()
+
+
+def test_indexer_resolves_receiver_method_via_typed_parameter_binding(tmp_path):
+    project = tmp_path / "typed_project"
+    project.mkdir()
+    (project / "controller.py").write_text(
+        """
+class TransactionService:
+    def get_by_id(self, session, txn_id):
+        return txn_id
+
+
+def get_transaction_by_id(session, service: TransactionService):
+    return service.get_by_id(session, 1)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "graph3.db"
+    store = SQLiteGraphStore(db_path)
+    try:
+        stats = Indexer(store).index(project)
+        assert stats.files_analyzed == 1
+
+        controller = next(
+            s for s in store.get_all_symbols() if s.qualified_name == "controller.get_transaction_by_id"
+        )
+        service_method = next(
+            s for s in store.get_all_symbols() if s.qualified_name == "controller.TransactionService.get_by_id"
+        )
+
+        calls = store.get_relationships_from(controller.id, RelationshipType.CALLS)
+        assert any(rel.target_id == service_method.id for rel in calls)
+    finally:
+        store.close()
