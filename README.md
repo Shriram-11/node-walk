@@ -139,6 +139,16 @@ pytest tests/ -v
 
 ---
 
+## Release Automation Setup
+
+The `Release & Publish` workflow can push release commits/tags to `main`.
+
+If your repository ruleset requires pull requests for `main`, create a `RELEASE_PUSH_TOKEN` secret with a PAT from a user/app that is explicitly allowed to bypass that ruleset, then add that actor to the ruleset bypass list.
+
+If `RELEASE_PUSH_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
+
+---
+
 ## Graph Storage & Lifecycle
 
 The generated graph is stored in `.node_walk/graph.db` inside your indexed repository. It is disposable and can be re-indexed at any time with `node-walk index .`.
