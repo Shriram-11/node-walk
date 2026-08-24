@@ -28,6 +28,7 @@ from node_walk.resolution.calls import (
     CrossFileCallResolver,
 )
 from node_walk.resolution.imports import ImportResolver
+from node_walk.resolution.inheritance import InheritanceResolver
 
 
 class Indexer:
@@ -169,6 +170,38 @@ class Indexer:
                 )
                 new_relationships.append(rel)
 
+        # Then, run InheritanceResolver on INHERITANCE facts
+        inheritance_facts = self._store.get_relationship_facts(
+            fact_type=FactType.INHERITANCE, status=FactStatus.PENDING
+        )
+        inheritance_resolver = InheritanceResolver()
+        total_resolved += inheritance_resolver.run(self._store, inheritance_facts)
+        
+        # Materialize resolved / probable INHERITANCE facts into EXTENDS / IMPLEMENTS
+        updated_inheritance_facts = self._store.get_relationship_facts(fact_type=FactType.INHERITANCE)
+        for fact in updated_inheritance_facts:
+            if fact.status in (FactStatus.RESOLVED, FactStatus.PROBABLE) and fact.resolved_target_id:
+                is_impl = fact.metadata.get("is_implements", False)
+                rel_type = RelationshipType.IMPLEMENTS if is_impl else RelationshipType.EXTENDS
+                rel = Relationship(
+                    source_id=fact.source_symbol_id,
+                    target_id=fact.resolved_target_id,
+                    type=rel_type,
+                    source_location=fact.source_location,
+                    resolution=(
+                        ResolutionStatus.RESOLVED 
+                        if fact.status == FactStatus.RESOLVED 
+                        else ResolutionStatus.PROBABLE
+                    ),
+                    metadata={
+                        "fact_id": fact.id,
+                        "target_name": fact.raw_text,
+                        "resolver": fact.resolver_name,
+                    },
+                )
+                new_relationships.append(rel)
+
+        # Bulk insert materialized relationships
         if new_relationships:
             self._store.store_relationships(new_relationships)
 
