@@ -479,8 +479,8 @@ class SymbolCollector:
 
         if body_node:
             self._scope.push(func_sym)
-            self._local_bindings[func_sym.id] = self._collect_parameter_bindings(params_node)
-            self._local_bindings[func_sym.id].update(self._collect_local_bindings(body_node))
+            self._local_bindings[func_sym.id] = self._collect_parameter_bindings(params_node, func_sym)
+            self._local_bindings[func_sym.id].update(self._collect_local_bindings(body_node, func_sym))
             self._collect_calls(body_node, func_sym)
             for child in body_node.children:
                 if child.type in ("function_definition", "decorated_definition"):
@@ -695,12 +695,12 @@ class SymbolCollector:
             current = parent
         return None
 
-    def _collect_local_bindings(self, node: Node) -> dict[str, str]:
+    def _collect_local_bindings(self, node: Node, func_sym: Symbol) -> dict[str, str]:
         bindings: dict[str, str] = {}
-        self._walk_assignment_bindings(node, bindings)
+        self._walk_assignment_bindings(node, bindings, func_sym)
         return bindings
 
-    def _collect_parameter_bindings(self, params_node: Node | None) -> dict[str, str]:
+    def _collect_parameter_bindings(self, params_node: Node | None, func_sym: Symbol) -> dict[str, str]:
         bindings: dict[str, str] = {}
         if not params_node:
             return bindings
@@ -718,10 +718,22 @@ class SymbolCollector:
             type_name = node_text(type_node, self.source)
             if param_name and type_name:
                 bindings[param_name] = type_name
+                self.relationship_facts.append(
+                    RelationshipFact(
+                        file_id=self.file_info.id,
+                        source_symbol_id=func_sym.id,
+                        fact_type=FactType.BINDING,
+                        raw_text=param_name,
+                        simple_name=param_name.split(".")[-1],
+                        qualified_hint=type_name,
+                        source_location=SourceLocation(file_id=self.file_info.id, line=start_line(child)),
+                        metadata={"binding_type": "parameter"},
+                    )
+                )
 
         return bindings
 
-    def _walk_assignment_bindings(self, node: Node, bindings: dict[str, str]) -> None:
+    def _walk_assignment_bindings(self, node: Node, bindings: dict[str, str], func_sym: Symbol) -> None:
         if node.type in ("function_definition", "class_definition", "decorated_definition"):
             return
 
@@ -733,12 +745,12 @@ class SymbolCollector:
                     break
 
         if assignment_node.type == "assignment":
-            self._capture_assignment_binding(assignment_node, bindings)
+            self._capture_assignment_binding(assignment_node, bindings, func_sym)
 
         for child in node.children:
-            self._walk_assignment_bindings(child, bindings)
+            self._walk_assignment_bindings(child, bindings, func_sym)
 
-    def _capture_assignment_binding(self, node: Node, bindings: dict[str, str]) -> None:
+    def _capture_assignment_binding(self, node: Node, bindings: dict[str, str], func_sym: Symbol) -> None:
         targets = self._extract_assignment_targets(node)
         if len(targets) != 1:
             return
@@ -752,6 +764,18 @@ class SymbolCollector:
             return
 
         bindings[targets[0]] = node_text(func_node, self.source)
+        self.relationship_facts.append(
+            RelationshipFact(
+                file_id=self.file_info.id,
+                source_symbol_id=func_sym.id,
+                fact_type=FactType.BINDING,
+                raw_text=targets[0],
+                simple_name=targets[0].split(".")[-1],
+                qualified_hint=node_text(func_node, self.source),
+                source_location=SourceLocation(file_id=self.file_info.id, line=start_line(node)),
+                metadata={"binding_type": "assignment"},
+            )
+        )
 
     def _resolve_receiver_binding(self, caller_id: str, receiver_text: str) -> str:
         if not receiver_text or "." in receiver_text:

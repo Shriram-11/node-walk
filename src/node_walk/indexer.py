@@ -29,6 +29,7 @@ from node_walk.resolution.calls import (
 )
 from node_walk.resolution.imports import ImportResolver
 from node_walk.resolution.inheritance import InheritanceResolver
+from node_walk.resolution.bindings import BindingResolver
 
 
 class Indexer:
@@ -127,6 +128,13 @@ class Indexer:
         )
         import_resolver = ImportResolver()
         total_resolved = import_resolver.run(self._store, import_facts)
+
+        # Then, run BindingResolver on BINDING facts
+        binding_facts = self._store.get_relationship_facts(
+            fact_type=FactType.BINDING, status=FactStatus.PENDING
+        )
+        binding_resolver = BindingResolver()
+        total_resolved += binding_resolver.run(self._store, binding_facts)
 
         # Then, run CALL resolvers
         resolvers = [

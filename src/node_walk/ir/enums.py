@@ -68,6 +68,7 @@ class FactType(StrEnum):
     IMPORT = "IMPORT"
     INHERITANCE = "INHERITANCE"
     REFERENCE = "REFERENCE"
+    BINDING = "BINDING"
 
 
 class FactStatus(StrEnum):
