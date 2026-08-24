@@ -17,9 +17,19 @@ from typing import Callable
 
 from node_walk.analysis.base import FileDiscovery, LanguageAnalyzer
 from node_walk.analysis.python import PythonAnalyzer
-from node_walk.ir.models import AnalysisResult
-from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus
+from node_walk.ir.models import AnalysisResult, Relationship
+from node_walk.ir.enums import Language, RelationshipType, ResolutionStatus, FactStatus, FactType
 from node_walk.storage.base import GraphStore
+from node_walk.resolution.calls import (
+    NoiseFilterCallResolver,
+    ClassMemberCallResolver,
+    InFileCallResolver,
+    ConstructorCallResolver,
+    CrossFileCallResolver,
+)
+from node_walk.resolution.imports import ImportResolver
+from node_walk.resolution.inheritance import InheritanceResolver
+from node_walk.resolution.bindings import BindingResolver
 
 
 class Indexer:
@@ -85,8 +95,11 @@ class Indexer:
         # --- 3. Store ---
         self._store.store_results(results)
 
-        # --- 4. Cross-file resolution ---
-        resolved_count = self._resolve_cross_file(results)
+        # --- 4. Run Resolver Pipeline ---
+        resolved_facts_count = self._run_resolvers()
+
+        # --- 5. Cross-file resolution (Legacy fallback) ---
+        resolved_legacy_count = self._resolve_cross_file(results)
 
         symbols_total = sum(len(r.symbols) for r in results)
         rels_total = sum(len(r.relationships) for r in results)
@@ -96,12 +109,115 @@ class Indexer:
             files_analyzed=len(results),
             symbols_extracted=symbols_total,
             relationships_extracted=rels_total,
-            relationships_resolved=resolved_count,
+            relationships_resolved=resolved_legacy_count + resolved_facts_count,
             errors=errors,
         )
 
     # ------------------------------------------------------------------
-    # Cross-file resolution
+    # Resolution Pipeline
+    # ------------------------------------------------------------------
+
+    def _run_resolvers(self) -> int:
+        """
+        Run semantic resolution passes on raw facts, and materialize the results
+        into the main relationships table.
+        """
+        # First, run ImportResolver on IMPORT facts
+        import_facts = self._store.get_relationship_facts(
+            fact_type=FactType.IMPORT, status=FactStatus.PENDING
+        )
+        import_resolver = ImportResolver()
+        total_resolved = import_resolver.run(self._store, import_facts)
+
+        # Then, run BindingResolver on BINDING facts
+        binding_facts = self._store.get_relationship_facts(
+            fact_type=FactType.BINDING, status=FactStatus.PENDING
+        )
+        binding_resolver = BindingResolver()
+        total_resolved += binding_resolver.run(self._store, binding_facts)
+
+        # Then, run CALL resolvers
+        resolvers = [
+            NoiseFilterCallResolver(),
+            InFileCallResolver(),
+            ClassMemberCallResolver(),
+            ConstructorCallResolver(),
+            CrossFileCallResolver(),
+        ]
+        for resolver in resolvers:
+            pending_call_facts = self._store.get_relationship_facts(
+                fact_type=FactType.CALL, status=FactStatus.PENDING
+            )
+            if not pending_call_facts:
+                break
+            count = resolver.run(self._store, pending_call_facts)
+            total_resolved += count
+
+        # Materialize resolved / probable CALL facts into relationships
+        # We need to fetch the updated facts since resolver.run mutated them in memory but let's be safe
+        updated_call_facts = self._store.get_relationship_facts(fact_type=FactType.CALL)
+        
+        new_relationships = []
+        for fact in updated_call_facts:
+            if fact.status in (FactStatus.RESOLVED, FactStatus.PROBABLE) and fact.resolved_target_id:
+                rel = Relationship(
+                    source_id=fact.source_symbol_id,
+                    target_id=fact.resolved_target_id,
+                    type=RelationshipType.CALLS,
+                    source_location=fact.source_location,
+                    resolution=(
+                        ResolutionStatus.RESOLVED 
+                        if fact.status == FactStatus.RESOLVED 
+                        else ResolutionStatus.PROBABLE
+                    ),
+                    metadata={
+                        "fact_id": fact.id,
+                        "call_text": fact.raw_text,
+                        "callee_name": fact.simple_name,
+                        "resolver": fact.resolver_name,
+                    },
+                )
+                new_relationships.append(rel)
+
+        # Then, run InheritanceResolver on INHERITANCE facts
+        inheritance_facts = self._store.get_relationship_facts(
+            fact_type=FactType.INHERITANCE, status=FactStatus.PENDING
+        )
+        inheritance_resolver = InheritanceResolver()
+        total_resolved += inheritance_resolver.run(self._store, inheritance_facts)
+        
+        # Materialize resolved / probable INHERITANCE facts into EXTENDS / IMPLEMENTS
+        updated_inheritance_facts = self._store.get_relationship_facts(fact_type=FactType.INHERITANCE)
+        for fact in updated_inheritance_facts:
+            if fact.status in (FactStatus.RESOLVED, FactStatus.PROBABLE) and fact.resolved_target_id:
+                is_impl = fact.metadata.get("is_implements", False)
+                rel_type = RelationshipType.IMPLEMENTS if is_impl else RelationshipType.EXTENDS
+                rel = Relationship(
+                    source_id=fact.source_symbol_id,
+                    target_id=fact.resolved_target_id,
+                    type=rel_type,
+                    source_location=fact.source_location,
+                    resolution=(
+                        ResolutionStatus.RESOLVED 
+                        if fact.status == FactStatus.RESOLVED 
+                        else ResolutionStatus.PROBABLE
+                    ),
+                    metadata={
+                        "fact_id": fact.id,
+                        "target_name": fact.raw_text,
+                        "resolver": fact.resolver_name,
+                    },
+                )
+                new_relationships.append(rel)
+
+        # Bulk insert materialized relationships
+        if new_relationships:
+            self._store.store_relationships(new_relationships)
+
+        return total_resolved
+
+    # ------------------------------------------------------------------
+    # Cross-file resolution (Legacy)
     # ------------------------------------------------------------------
 
     def _resolve_cross_file(self, results: list[AnalysisResult]) -> int:

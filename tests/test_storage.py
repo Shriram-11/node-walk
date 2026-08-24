@@ -10,11 +10,14 @@ from node_walk.ir.models import (
     FileInfo,
     Language,
     Relationship,
+    RelationshipFact,
     RelationshipType,
     ResolutionStatus,
+    SourceLocation,
     Symbol,
     SymbolKind,
 )
+from node_walk.ir.enums import FactStatus, FactType
 from node_walk.storage.repository import SQLiteGraphStore
 
 
@@ -129,3 +132,52 @@ class TestStoreRoundTrip:
         updated = store.get_relationships_from(sym_a.id, RelationshipType.CALLS)
         assert updated[0].target_id == sym_b.id
         assert updated[0].resolution == ResolutionStatus.RESOLVED
+
+    def test_relationship_fact_stored_and_retrieved(self, store):
+        f = _make_file()
+        sym = _make_symbol(f.id, name="caller")
+        fact = RelationshipFact(
+            file_id=f.id,
+            source_symbol_id=sym.id,
+            fact_type=FactType.CALL,
+            raw_text="self.chat",
+            simple_name="chat",
+            receiver_text="self",
+            source_location=SourceLocation(file_id=f.id, line=4, col=8),
+            metadata={"call_kind": "attribute"},
+        )
+
+        store.store_result(AnalysisResult(file=f, symbols=[sym], relationship_facts=[fact]))
+
+        facts = store.get_relationship_facts(FactType.CALL)
+        assert len(facts) == 1
+        assert facts[0].raw_text == "self.chat"
+        assert facts[0].metadata["call_kind"] == "attribute"
+        assert facts[0].status == FactStatus.PENDING
+
+    def test_update_relationship_fact(self, store):
+        f = _make_file()
+        sym_a = _make_symbol(f.id, name="caller")
+        sym_b = _make_symbol(f.id, name="callee")
+        fact = RelationshipFact(
+            file_id=f.id,
+            source_symbol_id=sym_a.id,
+            fact_type=FactType.CALL,
+            raw_text="callee",
+            simple_name="callee",
+        )
+
+        store.store_result(AnalysisResult(file=f, symbols=[sym_a, sym_b], relationship_facts=[fact]))
+        store.update_relationship_fact(
+            fact.id,
+            status=FactStatus.RESOLVED,
+            resolved_target_id=sym_b.id,
+            resolver_name="unit-test",
+            diagnostics={"reason": "exact simple-name match"},
+        )
+
+        facts = store.get_relationship_facts(FactType.CALL, FactStatus.RESOLVED)
+        assert len(facts) == 1
+        assert facts[0].resolved_target_id == sym_b.id
+        assert facts[0].resolver_name == "unit-test"
+        assert facts[0].diagnostics["reason"] == "exact simple-name match"

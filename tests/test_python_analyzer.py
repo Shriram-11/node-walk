@@ -7,6 +7,7 @@ import pytest
 from node_walk.analysis.python_analyzer import PythonAnalyzer
 from node_walk.ir.models import (
     FileInfo,
+    FactType,
     Language,
     RelationshipType,
     ResolutionStatus,
@@ -59,6 +60,12 @@ class TestSymbolExtraction:
         method_sym = next(s for s in self.result.symbols if s.name == "create_user")
         assert method_sym.parent_id == class_sym.id
 
+    def test_qualified_names_do_not_duplicate_module_segment(self):
+        class_sym = next(s for s in self.result.symbols if s.name == "UserService")
+        method_sym = next(s for s in self.result.symbols if s.name == "create_user")
+        assert class_sym.qualified_name == "services.UserService"
+        assert method_sym.qualified_name == "services.UserService.create_user"
+
     def test_docstring_extracted(self):
         svc = next(s for s in self.result.symbols if s.name == "UserService")
         assert "user" in svc.docstring.lower()
@@ -68,33 +75,19 @@ class TestRelationshipExtraction:
     def setup_method(self):
         self.result = _analyze("services.py")
         self.rels = self.result.relationships
+        self.facts = self.result.relationship_facts
 
     def test_contains_relationships_present(self):
         contains = [r for r in self.rels if r.type == RelationshipType.CONTAINS]
         assert len(contains) > 0
 
-    def test_calls_relationships_present(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        assert len(calls) > 0
+    def test_call_facts_present(self):
+        call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
+        assert len(call_facts) > 0
 
-    def test_unresolved_calls_marked(self):
-        unresolved = [
-            r for r in self.rels
-            if r.type == RelationshipType.CALLS and r.resolution == ResolutionStatus.UNRESOLVED
-        ]
-        # There should be some unresolved calls (e.g., self.repo.save)
-        assert len(unresolved) >= 0  # may vary; just ensure no crash
-
-    def test_call_metadata_has_call_text(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        for c in calls:
-            assert "call_text" in c.metadata
-
-    def test_source_location_on_calls(self):
-        calls = [r for r in self.rels if r.type == RelationshipType.CALLS]
-        for c in calls:
-            assert c.source_location is not None
-            assert c.source_location.line >= 1
+    def test_call_facts_capture_receiver_text(self):
+        call_facts = [f for f in self.facts if f.fact_type == FactType.CALL]
+        assert any(f.raw_text == "self._notify" and f.receiver_text == "self" for f in call_facts)
 
 
 class TestAbcDetection:

@@ -41,4 +41,5 @@ class PythonAnalyzer(LanguageAnalyzer):
             file=file_info,
             symbols=collector.symbols,
             relationships=collector.relationships,
+            relationship_facts=collector.relationship_facts,
         )

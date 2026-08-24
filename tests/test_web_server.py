@@ -115,9 +115,10 @@ class TestSymbolEndpoint:
 
         data = _get(live_server, f"/api/symbol/{node_id}")
         assert "symbol" in data
-        assert "source_lines" in data
-        assert "callers_count" in data
-        assert "callees_count" in data
+        assert "counts" in data
+        assert "callers" in data
+        assert "callees" in data
+        assert isinstance(data["callers"], list)
 
     def test_invalid_id_returns_error_json(self, live_server):
         import urllib.error
