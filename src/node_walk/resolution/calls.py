@@ -233,6 +233,7 @@ class CrossFileCallResolver(FactResolver):
 
         # 3. Check if the receiver or simple name matches an imported symbol
         match_id = None
+        receiver_binding = fact.metadata.get("receiver_binding", "")
         
         # Case A: `adapter.chat()` where `adapter` is imported
         if fact.receiver_text and fact.receiver_text in import_map:
@@ -242,6 +243,19 @@ class CrossFileCallResolver(FactResolver):
             if receiver_sym:
                 # Find the method/function inside the receiver module/class
                 target_qname = f"{receiver_sym.qualified_name}.{fact.simple_name}"
+                candidates = store.find_symbols_by_qualified_name(target_qname)
+                if candidates:
+                    match_id = candidates[0].id
+
+        # Case A2: `adapter.chat()` where `adapter` was bound from `adapter = OllamaAdapter(...)`
+        elif fact.receiver_text and receiver_binding:
+            binding_simple = receiver_binding.split(".")[-1]
+            class_candidates = [
+                s for s in store.find_symbols_by_name(binding_simple, exact=True)
+                if s.kind == SymbolKind.CLASS
+            ]
+            if len(class_candidates) == 1:
+                target_qname = f"{class_candidates[0].qualified_name}.{fact.simple_name}"
                 candidates = store.find_symbols_by_qualified_name(target_qname)
                 if candidates:
                     match_id = candidates[0].id
@@ -285,4 +299,3 @@ class CrossFileCallResolver(FactResolver):
             status=FactStatus.UNRESOLVED,
             diagnostics={"strategy": "cross_file_not_found"}
         )
-

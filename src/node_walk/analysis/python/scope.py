@@ -7,6 +7,7 @@ on AST logic, not bookkeeping.
 
 from __future__ import annotations
 
+from node_walk.ir.enums import SymbolKind
 from node_walk.ir.models import Symbol
 
 
@@ -40,5 +41,10 @@ class Scope:
         on the stack, e.g. "myapp.services.UserService".
         """
         parts = [module_qname] if module_qname else []
-        parts.extend(s.name for s in self._stack)
+        for sym in self._stack:
+            # module_qname already includes the module path, so avoid duplicating
+            # the module symbol's simple name in top-level qualified names.
+            if sym.kind == SymbolKind.MODULE:
+                continue
+            parts.append(sym.name)
         return ".".join(parts)

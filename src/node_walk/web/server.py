@@ -20,6 +20,7 @@ from typing import Any
 
 from node_walk.query.engine import QueryEngine
 from node_walk.storage.sqlite_store import SQLiteGraphStore
+from node_walk.ir.enums import FactStatus
 
 # Directory where index.html / style.css / app.js live (same dir as this file)
 _WEB_DIR = Path(__file__).parent
@@ -188,14 +189,54 @@ class _GraphHandler(BaseHTTPRequestHandler):
         if src:
             source_lines = src.lines
 
-        callers_count = len(self.server.store.get_relationships_to(sym_id))  # type: ignore[attr-defined]
-        callees_count = len(self.server.store.get_relationships_from(sym_id))  # type: ignore[attr-defined]
+        # Relationship metrics and lists
+        inbound_rels = self.server.store.get_relationships_to(sym_id)  # type: ignore[attr-defined]
+        outbound_rels = self.server.store.get_relationships_from(sym_id)  # type: ignore[attr-defined]
+
+        # Gather file-specific unresolved facts
+        unresolved_facts = [
+            {
+                "fact_type": f.fact_type.value,
+                "raw_text": f.raw_text,
+                "line": f.source_location.line if f.source_location else None
+            }
+            for f in self.server.store.get_relationship_facts(status=FactStatus.UNRESOLVED)  # type: ignore[attr-defined]
+            if f.source_symbol_id == sym.id
+        ]
+
+        def format_rel(rel, is_inbound):
+            other_id = rel.source_id if is_inbound else rel.target_id
+            other_sym = self.server.store.get_symbol(other_id)  # type: ignore[attr-defined]
+            return {
+                "id": other_id,
+                "name": other_sym.name if other_sym else "Unknown",
+                "kind": other_sym.kind.value if other_sym else "Unknown",
+                "rel_type": rel.type.value,
+                "resolution": rel.resolution.value,
+            }
+
+        callers = [format_rel(r, True) for r in inbound_rels]
+        callees = [format_rel(r, False) for r in outbound_rels]
+
+        # Breakdowns
+        in_counts: dict[str, int] = {}
+        for r in inbound_rels:
+            in_counts[r.type.value] = in_counts.get(r.type.value, 0) + 1
+            
+        out_counts: dict[str, int] = {}
+        for r in outbound_rels:
+            out_counts[r.type.value] = out_counts.get(r.type.value, 0) + 1
 
         self._send_json({
             "symbol": _sym_to_dict(sym, file_path),
             "source_lines": source_lines,
-            "callers_count": callers_count,
-            "callees_count": callees_count,
+            "counts": {
+                "inbound": in_counts,
+                "outbound": out_counts,
+            },
+            "callers": callers,
+            "callees": callees,
+            "unresolved_facts": unresolved_facts,
         })
 
     def _handle_neighbors(self, sym_id: str, qs: dict) -> None:

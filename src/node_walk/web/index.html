@@ -122,14 +122,23 @@
           <dd id="detail-sig"></dd>
         </div>
         <div class="detail-row">
-          <dt>Callers</dt>
-          <dd id="detail-callers"></dd>
+          <dt>Incoming (<span id="detail-in-count">0</span>)</dt>
+          <dd>
+            <ul id="detail-callers-list" class="detail-rel-list"></ul>
+          </dd>
         </div>
         <div class="detail-row">
-          <dt>Callees</dt>
-          <dd id="detail-callees"></dd>
+          <dt>Outgoing (<span id="detail-out-count">0</span>)</dt>
+          <dd>
+            <ul id="detail-callees-list" class="detail-rel-list"></ul>
+          </dd>
         </div>
       </dl>
+
+      <div id="detail-unresolved-wrap" hidden>
+        <h3 class="detail-section-title">Unresolved References</h3>
+        <ul id="detail-unresolved-list" class="detail-unresolved-list"></ul>
+      </div>
 
       <div id="detail-docstring-wrap" hidden>
         <h3 class="detail-section-title">Docstring</h3>

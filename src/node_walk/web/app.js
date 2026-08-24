@@ -103,8 +103,12 @@ const elDetailFile   = document.getElementById('detail-file');
 const elDetailLines  = document.getElementById('detail-lines');
 const elDetailSig    = document.getElementById('detail-sig');
 const elDetailSigRow = document.getElementById('detail-sig-row');
-const elDetailCallers = document.getElementById('detail-callers');
-const elDetailCallees = document.getElementById('detail-callees');
+const elDetailInCount = document.getElementById('detail-in-count');
+const elDetailOutCount = document.getElementById('detail-out-count');
+const elDetailCallersList = document.getElementById('detail-callers-list');
+const elDetailCalleesList = document.getElementById('detail-callees-list');
+const elDetailUnresolvedWrap = document.getElementById('detail-unresolved-wrap');
+const elDetailUnresolvedList = document.getElementById('detail-unresolved-list');
 const elDetailDoc    = document.getElementById('detail-docstring');
 const elDetailDocWrap = document.getElementById('detail-docstring-wrap');
 const elDetailSrcCode = document.getElementById('detail-source-code');
@@ -206,6 +210,14 @@ function buildStylesheet() {
       'width':        r === 'EXTENDS' ? 3 : r === 'CONTAINS' ? 1 : 2,
     },
   }));
+
+  edgeStyles.push({
+    selector: `edge[resolution="PROBABLE"]`,
+    style: {
+      'line-style': 'dashed',
+      'line-dash-pattern': [4, 4],
+    }
+  });
 
   return [
     {
@@ -703,8 +715,50 @@ async function showDetailPanel(id) {
       elDetailSigRow.hidden = true;
     }
 
-    elDetailCallers.textContent = data.callers_count;
-    elDetailCallees.textContent = data.callees_count;
+    const inTotal = Object.values(data.counts.inbound || {}).reduce((a, b) => a + b, 0);
+    const outTotal = Object.values(data.counts.outbound || {}).reduce((a, b) => a + b, 0);
+    elDetailInCount.textContent = inTotal;
+    elDetailOutCount.textContent = outTotal;
+
+    function renderRelList(list, el) {
+      el.innerHTML = '';
+      if (!list || list.length === 0) {
+        el.innerHTML = '<li class="detail-rel-item empty">None</li>';
+        return;
+      }
+      list.forEach(r => {
+        const li = document.createElement('li');
+        li.className = 'detail-rel-item';
+        const isProb = r.resolution === 'PROBABLE';
+        const glyph = kindGlyph(r.kind);
+        li.innerHTML = `
+          <span class="rel-badge" style="background:${relColor(r.rel_type)}; opacity: ${isProb ? '0.7' : '1'}">${r.rel_type}</span>
+          <span class="rel-target-glyph" style="color:${kindColor(r.kind)}">${glyph}</span>
+          <span class="rel-target-name ${isProb ? 'probable' : ''}" title="${isProb ? 'Probable match' : ''}">${r.name}</span>
+        `;
+        li.addEventListener('click', () => {
+          addSymbolSeed(r.id);
+        });
+        el.appendChild(li);
+      });
+    }
+
+    renderRelList(data.callers, elDetailCallersList);
+    renderRelList(data.callees, elDetailCalleesList);
+
+    if (data.unresolved_facts && data.unresolved_facts.length > 0) {
+      elDetailUnresolvedWrap.hidden = false;
+      elDetailUnresolvedList.innerHTML = '';
+      data.unresolved_facts.forEach(f => {
+        const li = document.createElement('li');
+        li.className = 'detail-unresolved-item';
+        li.innerHTML = `<span class="unresolved-type">${f.fact_type}</span> <span class="unresolved-text">${f.raw_text}</span>`;
+        if (f.line) li.title = `Line ${f.line}`;
+        elDetailUnresolvedList.appendChild(li);
+      });
+    } else {
+      elDetailUnresolvedWrap.hidden = true;
+    }
 
     if (sym.docstring) {
       elDetailDoc.textContent = sym.docstring;

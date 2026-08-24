@@ -60,6 +60,12 @@ class TestSymbolExtraction:
         method_sym = next(s for s in self.result.symbols if s.name == "create_user")
         assert method_sym.parent_id == class_sym.id
 
+    def test_qualified_names_do_not_duplicate_module_segment(self):
+        class_sym = next(s for s in self.result.symbols if s.name == "UserService")
+        method_sym = next(s for s in self.result.symbols if s.name == "create_user")
+        assert class_sym.qualified_name == "services.UserService"
+        assert method_sym.qualified_name == "services.UserService.create_user"
+
     def test_docstring_extracted(self):
         svc = next(s for s in self.result.symbols if s.name == "UserService")
         assert "user" in svc.docstring.lower()

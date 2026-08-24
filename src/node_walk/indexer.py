@@ -129,10 +129,6 @@ class Indexer:
         total_resolved = import_resolver.run(self._store, import_facts)
 
         # Then, run CALL resolvers
-        call_facts = self._store.get_relationship_facts(
-            fact_type=FactType.CALL, status=FactStatus.PENDING
-        )
-
         resolvers = [
             NoiseFilterCallResolver(),
             InFileCallResolver(),
@@ -141,7 +137,12 @@ class Indexer:
             CrossFileCallResolver(),
         ]
         for resolver in resolvers:
-            count = resolver.run(self._store, call_facts)
+            pending_call_facts = self._store.get_relationship_facts(
+                fact_type=FactType.CALL, status=FactStatus.PENDING
+            )
+            if not pending_call_facts:
+                break
+            count = resolver.run(self._store, pending_call_facts)
             total_resolved += count
 
         # Materialize resolved / probable CALL facts into relationships

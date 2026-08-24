@@ -152,6 +152,8 @@ class SymbolCollector:
         self._symbols_by_id: dict[str, Symbol] = {}
         # Per-class member registry populated before method body analysis.
         self._class_members: dict[str, dict[str, Symbol]] = {}
+        # Per-function local variable -> constructor/function call binding hints.
+        self._local_bindings: dict[str, dict[str, str]] = {}
 
         self._scope = Scope()
         self._module_qname = derive_module_qname(file_info.path)
@@ -477,6 +479,7 @@ class SymbolCollector:
 
         if body_node:
             self._scope.push(func_sym)
+            self._local_bindings[func_sym.id] = self._collect_local_bindings(body_node)
             self._collect_calls(body_node, func_sym)
             for child in body_node.children:
                 if child.type in ("function_definition", "decorated_definition"):
@@ -526,6 +529,7 @@ class SymbolCollector:
                     "call_text": call_text,
                     "callee_name": callee_name,
                     "receiver_text": receiver_text,
+                    "receiver_binding": self._resolve_receiver_binding(caller_sym.id, receiver_text),
                 },
             )
         )
@@ -689,3 +693,45 @@ class SymbolCollector:
                 return parent
             current = parent
         return None
+
+    def _collect_local_bindings(self, node: Node) -> dict[str, str]:
+        bindings: dict[str, str] = {}
+        self._walk_assignment_bindings(node, bindings)
+        return bindings
+
+    def _walk_assignment_bindings(self, node: Node, bindings: dict[str, str]) -> None:
+        if node.type in ("function_definition", "class_definition", "decorated_definition"):
+            return
+
+        assignment_node = node
+        if node.type == "expression_statement":
+            for child in node.children:
+                if child.type == "assignment":
+                    assignment_node = child
+                    break
+
+        if assignment_node.type == "assignment":
+            self._capture_assignment_binding(assignment_node, bindings)
+
+        for child in node.children:
+            self._walk_assignment_bindings(child, bindings)
+
+    def _capture_assignment_binding(self, node: Node, bindings: dict[str, str]) -> None:
+        targets = self._extract_assignment_targets(node)
+        if len(targets) != 1:
+            return
+
+        call_node = next((child for child in node.children if child.type == "call"), None)
+        if not call_node:
+            return
+
+        func_node = call_node.child_by_field_name("function")
+        if not func_node:
+            return
+
+        bindings[targets[0]] = node_text(func_node, self.source)
+
+    def _resolve_receiver_binding(self, caller_id: str, receiver_text: str) -> str:
+        if not receiver_text or "." in receiver_text:
+            return ""
+        return self._local_bindings.get(caller_id, {}).get(receiver_text, "")
