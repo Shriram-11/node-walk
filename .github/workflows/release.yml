@@ -25,19 +25,26 @@ permissions:
   contents: write
   id-token: write
 
-env:
-  RELEASE_PUSH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN != '' && secrets.RELEASE_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
-
 jobs:
   release:
     name: Auto-bump, Tag, Build & Publish
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.target == 'testpypi' && 'testpypi' || 'pypi' }}
+      url: ${{ inputs.target == 'testpypi' && 'https://test.pypi.org/project/node-walk/' || 'https://pypi.org/project/node-walk/' }}
     steps:
+      - name: Generate GitHub App Token
+        id: app_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ env.RELEASE_PUSH_TOKEN }}
+          token: ${{ steps.app_token.outputs.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -129,6 +136,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ steps.app_token.outputs.token }}
           tag_name: ${{ steps.auto_tag.outputs.tag }}
           files: dist/*
           generate_release_notes: true
