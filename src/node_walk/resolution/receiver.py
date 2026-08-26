@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from node_walk.ir.enums import FactStatus, FactType, SymbolKind
+from node_walk.ir.enums import FactStatus, FactType, SymbolKind, RelationshipType
 from node_walk.ir.models import RelationshipFact, Symbol
 from node_walk.storage.base import GraphStore
 
@@ -171,18 +171,39 @@ class ReceiverService:
         )
 
     def resolve_member(self, receiver_res: ReceiverResolution, member_name: str) -> SymbolResolution | None:
+
         receiver_sym = self._store.get_symbol(receiver_res.resolved_symbol_id)
         if not receiver_sym:
             return None
 
-        target_qname = f"{receiver_sym.qualified_name}.{member_name}"
-        candidates = self._store.find_symbols_by_qualified_name(target_qname)
-        if candidates:
-            return SymbolResolution(
-                resolved_symbol_id=candidates[0].id,
-                confidence=receiver_res.confidence,
-                diagnostics={"strategy": "member_lookup"}
-            )
+        queue = [receiver_sym.id]
+        seen = set()
+
+        while queue:
+            current_id = queue.pop(0)
+            if current_id in seen:
+                continue
+            seen.add(current_id)
+
+            current_sym = self._store.get_symbol(current_id)
+            if not current_sym:
+                continue
+
+            target_qname = f"{current_sym.qualified_name}.{member_name}"
+            candidates = self._store.find_symbols_by_qualified_name(target_qname)
+            if candidates:
+                return SymbolResolution(
+                    resolved_symbol_id=candidates[0].id,
+                    confidence=receiver_res.confidence,
+                    diagnostics={"strategy": "member_lookup", "class": current_sym.name}
+                )
+                
+            # If not found, check base classes
+            extends = self._store.get_relationships_from(current_id, RelationshipType.EXTENDS)
+            implements = self._store.get_relationships_from(current_id, RelationshipType.IMPLEMENTS)
+            for rel in extends + implements:
+                if rel.target_id:
+                    queue.append(rel.target_id)
             
         return None
 
