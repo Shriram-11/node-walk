@@ -149,3 +149,42 @@ class TransactionService:
         assert any(rel.target_id == repository_method.id for rel in calls)
     finally:
         store.close()
+
+def test_indexer_resolves_fastapi_depends(tmp_path):
+    project = tmp_path / "fastapi_project"
+    project.mkdir()
+    (project / "main.py").write_text(
+        """
+class UserService:
+    def get_by_id(self, user_id):
+        return user_id
+
+def get_service() -> UserService:
+    return UserService()
+
+def get_user(service: UserService = Depends(get_service)):
+    return service.get_by_id(1)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "graph5.db"
+    store = SQLiteGraphStore(db_path)
+    try:
+        from node_walk.indexer import Indexer
+        Indexer(store).index(project)
+
+        get_user = next(
+            s for s in store.get_all_symbols()
+            if s.qualified_name == "main.get_user"
+        )
+        service_method = next(
+            s for s in store.get_all_symbols()
+            if s.qualified_name == "main.UserService.get_by_id"
+        )
+
+        calls = store.get_relationships_from(
+            get_user.id, RelationshipType.CALLS)
+        assert any(rel.target_id == service_method.id for rel in calls)
+    finally:
+        store.close()

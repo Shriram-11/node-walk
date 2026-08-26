@@ -219,85 +219,52 @@ class CrossFileCallResolver(FactResolver):
     def name(self) -> str:
         return "CrossFileCallResolver"
 
+    def run(self, store: GraphStore, facts: list[RelationshipFact]) -> int:
+        from node_walk.resolution.receiver import BindingIndex, ReceiverService
+        self._index = BindingIndex(store)
+        self._service = ReceiverService(store, self._index)
+        return super().run(store, facts)
+
     def resolve(self, store: GraphStore, fact: RelationshipFact) -> ResolutionResult | None:
         if fact.fact_type != FactType.CALL:
             return None
 
-        # 1. Fetch resolved imports and bindings for this call's file/scope.
+        # 1. Try resolving through receiver chains
+        if fact.receiver_text:
+            receiver_res = self._service.resolve_receiver(fact)
+            if receiver_res:
+                member_res = self._service.resolve_member(receiver_res, fact.simple_name)
+                if member_res:
+                    return ResolutionResult(
+                        status=FactStatus(member_res.confidence.lower()),
+                        resolved_target_id=member_res.resolved_symbol_id,
+                        diagnostics={
+                            "strategy": "cross_file_receiver_chain",
+                            "receiver_diagnostics": receiver_res.diagnostics,
+                            "member_diagnostics": member_res.diagnostics,
+                            "evidence": receiver_res.evidence
+                        }
+                    )
+                else:
+                    return ResolutionResult(
+                        status=FactStatus.UNRESOLVED,
+                        diagnostics={
+                            "strategy": "cross_file_missing_member",
+                            "receiver_diagnostics": receiver_res.diagnostics
+                        }
+                    )
+
+        # 2. Try simple import match for direct function calls
         import_facts = store.get_relationship_facts(
             fact_type=FactType.IMPORT, status=FactStatus.RESOLVED
         )
-        file_imports = [f for f in import_facts if f.file_id == fact.file_id]
-        binding_facts = store.get_relationship_facts(
-            fact_type=FactType.BINDING, status=FactStatus.RESOLVED
-        )
-        caller = store.get_symbol(fact.source_symbol_id)
-        enclosing_class_id = ""
-        current_id = caller.parent_id if caller else ""
-        while current_id:
-            current = store.get_symbol(current_id)
-            if not current:
-                break
-            if current.kind in (SymbolKind.CLASS, SymbolKind.INTERFACE):
-                enclosing_class_id = current.id
-                break
-            current_id = current.parent_id or ""
-
-        binding_source_ids = {fact.source_symbol_id}
-        if enclosing_class_id:
-            for candidate in store.get_all_symbols():
-                current_id = candidate.parent_id
-                while current_id:
-                    current = store.get_symbol(current_id)
-                    if not current:
-                        break
-                    if current.id == enclosing_class_id:
-                        binding_source_ids.add(candidate.id)
-                        break
-                    current_id = current.parent_id or ""
-        scope_bindings = [
-            f for f in binding_facts
-            if f.file_id == fact.file_id
-            and f.source_symbol_id in binding_source_ids
-            and f.resolved_target_id
-        ]
-
-        # 2. Build local namespace maps from imports and receiver bindings.
-        import_map: dict[str, str] = {}
-        for imp in file_imports:
-            # simple_name of the import fact is the imported name
-            # e.g., `from jarvis.model import adapter` -> simple_name = `adapter`
-            # For now we map the simple_name to the resolved target ID
-            if imp.resolved_target_id:
-                import_map[imp.simple_name] = imp.resolved_target_id
-
-        binding_map = {
-            binding.raw_text: binding.resolved_target_id for binding in scope_bindings}
-
-        # 3. Resolve the receiver, then resolve its member.
-        match_id = None
-        receiver_id = binding_map.get(fact.receiver_text, "")
-        if not receiver_id:
-            receiver_id = import_map.get(fact.receiver_text, "")
-
-        if receiver_id:
-            receiver_sym = store.get_symbol(receiver_id)
-            if receiver_sym:
-                target_qname = f"{receiver_sym.qualified_name}.{fact.simple_name}"
-                candidates = store.find_symbols_by_qualified_name(target_qname)
-                if candidates:
-                    match_id = candidates[0].id
-
-        # Case B: `chat()` where `chat` is imported directly.
-        elif not fact.receiver_text and fact.simple_name in import_map:
-            match_id = import_map[fact.simple_name]
-
-        if match_id:
-            return ResolutionResult(
-                status=FactStatus.RESOLVED,
-                resolved_target_id=match_id,
-                diagnostics={"strategy": "cross_file_import_aware"}
-            )
+        for imp in import_facts:
+            if imp.file_id == fact.file_id and imp.simple_name == fact.simple_name and imp.resolved_target_id:
+                return ResolutionResult(
+                    status=FactStatus.RESOLVED,
+                    resolved_target_id=imp.resolved_target_id,
+                    diagnostics={"strategy": "cross_file_direct_import"}
+                )
 
         # 4. Fallback: Unambiguous global match
         # If we couldn't resolve via imports, maybe the simple name is completely unique across the repo?
