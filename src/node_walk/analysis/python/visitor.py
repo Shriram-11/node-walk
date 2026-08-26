@@ -712,18 +712,42 @@ class SymbolCollector:
             return bindings
 
         for child in params_node.children:
-            if child.type not in {"typed_parameter", "typed_default_parameter"}:
+            if child.type not in {"typed_parameter", "typed_default_parameter", "default_parameter"}:
                 continue
 
             identifier = next((c for c in child.children if c.type == "identifier"), None)
             type_node = next((c for c in child.children if c.type == "type"), None)
-            if not identifier or not type_node:
+            
+            if not identifier:
                 continue
 
             param_name = node_text(identifier, self.source)
-            type_name = node_text(type_node, self.source)
-            if param_name and type_name:
-                bindings[param_name] = type_name
+            type_name = node_text(type_node, self.source) if type_node else ""
+            provider_ref = ""
+
+            # Check for FastAPI Depends in default value
+            if child.type in {"typed_default_parameter", "default_parameter"}:
+                # The default value is usually after the '=' sign
+                eq_found = False
+                for c in child.children:
+                    if c.type == "=":
+                        eq_found = True
+                        continue
+                    if eq_found and c.type == "call":
+                        func_node = c.child_by_field_name("function")
+                        if func_node:
+                            call_name = node_text(func_node, self.source)
+                            if call_name in {"Depends", "fastapi.Depends"}:
+                                args_node = c.child_by_field_name("arguments")
+                                if args_node:
+                                    for arg in args_node.children:
+                                        if arg.type in {"identifier", "attribute"}:
+                                            provider_ref = node_text(arg, self.source)
+                                            break
+
+            if param_name and (type_name or provider_ref):
+                # If we have both, prefer type_name for the binding, but we can store provider_ref in metadata
+                bindings[param_name] = type_name or provider_ref
                 self.relationship_facts.append(
                     RelationshipFact(
                         file_id=self.file_info.id,
@@ -733,7 +757,12 @@ class SymbolCollector:
                         simple_name=param_name.split(".")[-1],
                         qualified_hint=type_name,
                         source_location=SourceLocation(file_id=self.file_info.id, line=start_line(child)),
-                        metadata={"binding_type": "parameter"},
+                        scope_symbol_id=func_sym.id,
+                        metadata={
+                            "binding_type": "parameter",
+                            "provider_ref": provider_ref,
+                            "fastapi_depends": bool(provider_ref)
+                        },
                     )
                 )
 
@@ -761,11 +790,11 @@ class SymbolCollector:
         if not target_expr:
             return
 
-        inferred_hint = self._infer_assignment_binding_hint(node, bindings)
-        if not inferred_hint:
+        inferred_hint, provider_ref = self._infer_assignment_binding_hint(node, bindings)
+        if not inferred_hint and not provider_ref:
             return
 
-        bindings[target_expr] = inferred_hint
+        bindings[target_expr] = inferred_hint or provider_ref
         self.relationship_facts.append(
             RelationshipFact(
                 file_id=self.file_info.id,
@@ -776,7 +805,12 @@ class SymbolCollector:
                 receiver_text=".".join(target_expr.split(".")[:-1]),
                 qualified_hint=inferred_hint,
                 source_location=SourceLocation(file_id=self.file_info.id, line=start_line(node)),
-                metadata={"binding_type": "assignment"},
+                scope_symbol_id=func_sym.id,
+                metadata={
+                    "binding_type": "assignment",
+                    "provider_ref": provider_ref,
+                    "fastapi_depends": bool(provider_ref)
+                },
             )
         )
 
@@ -795,7 +829,7 @@ class SymbolCollector:
                     return text
         return ""
 
-    def _infer_assignment_binding_hint(self, node: Node, bindings: dict[str, str]) -> str:
+    def _infer_assignment_binding_hint(self, node: Node, bindings: dict[str, str]) -> tuple[str, str]:
         rhs_started = False
         rhs_identifier = ""
         for child in node.children:
@@ -803,12 +837,19 @@ class SymbolCollector:
                 if child.type == "call":
                     func_node = child.child_by_field_name("function")
                     if func_node:
-                        return node_text(func_node, self.source)
+                        call_name = node_text(func_node, self.source)
+                        if call_name in {"Depends", "fastapi.Depends"}:
+                            args_node = child.child_by_field_name("arguments")
+                            if args_node:
+                                for arg in args_node.children:
+                                    if arg.type in {"identifier", "attribute"}:
+                                        return "", node_text(arg, self.source)
+                        return call_name, ""
                 if child.type in {"identifier", "attribute"} and not rhs_identifier:
                     rhs_identifier = node_text(child, self.source).strip()
             elif child.type == "=":
                 rhs_started = True
 
         if rhs_identifier:
-            return bindings.get(rhs_identifier, "")
-        return ""
+            return bindings.get(rhs_identifier, ""), ""
+        return "", ""
