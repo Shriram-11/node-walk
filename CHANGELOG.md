@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+---
+
+## [0.5.0] - 2026-08-27
 ### Added
 - **Inheritance Traversal in Member Resolution**: Enabled the receiver resolution service to traverse class inheritance (checking both `EXTENDS` and `IMPLEMENTS` edges) when looking up methods, allowing inherited methods to resolve correctly.
 
