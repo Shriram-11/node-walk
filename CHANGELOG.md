@@ -8,18 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+### Added
+- **Inheritance Traversal in Member Resolution**: Enabled the receiver resolution service to traverse class inheritance (checking both `EXTENDS` and `IMPLEMENTS` edges) when looking up methods, allowing inherited methods to resolve correctly.
+
+### Changed
+- **Refactoring**: Cleaned up inline imports in the resolution modules (`calls.py` and `receiver.py`) by moving them to the top-level module scope.
 
 ---
 
 ## [0.4.0] - 2026-08-26
+### Added
+- **Chained Receiver Resolution**: Introduced `ReceiverService` and `BindingIndex` to resolve complex, nested receiver chains (e.g. `self.repo.session.get()`) segment by segment.
+- **FastAPI Dependency Injection**: Enhanced parameter and assignment extraction to support FastAPI `Depends(...)` patterns, recording provider references and annotations without creating false call edges to the `Depends` wrapper.
+- **Constructor & Attribute Propagation**: Added logic to trace type contracts established in class initializers (`__init__`) and pass bindings down constructor parameter boundaries.
 
 ---
 
 ## [0.3.1] - 2026-08-25
+### Added
+- **Fact-Based Resolution Pipeline**: Shifted the resolution model from direct AST evaluation to a two-phase pipeline using a new `RelationshipFact` SQLite storage layer. Decoupled extraction from graph-edge materialization.
+- **Modular Resolvers**: Implemented specialized fact resolvers:
+  - `ImportResolver` for mapping module imports.
+  - `BindingResolver` for typed annotations and assignments.
+  - `ClassMemberCallResolver` for same-class member resolution.
+  - `InFileCallResolver` for local file calls.
+  - `ConstructorCallResolver` to map constructor invocations to `__init__` methods.
+  - `CrossFileCallResolver` for cross-file call resolution.
+  - `InheritanceResolver` for resolving inheritance relationships.
+
+### Changed
+- **CI/CD Security**: Migrated PyPI deployment workflow to utilize PyPI Trusted Publishers (environments) and GitHub App authentication.
 
 ---
 
 ## [0.3.0] - 2026-08-23
+### Added
+- **Automated Releases**: Implemented hatch-vcs for automatic versioning. Configured automated tagging, release workflow, and package publication to PyPI.
 
 ---
 
