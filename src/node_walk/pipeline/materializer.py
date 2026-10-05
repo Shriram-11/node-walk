@@ -23,9 +23,12 @@ class Materializer:
     """
 
     def run(self, store: GraphStore) -> MaterializationResult:
+        # 1. Clean up any previously materialized fact-derived relationships
+        store.delete_fact_derived_relationships()
+
         new_relationships: list[Relationship] = []
 
-        # 1. CALL facts -> CALLS relationships
+        # 2. CALL facts -> CALLS relationships
         call_facts = store.get_relationship_facts(fact_type=FactType.CALL)
         for fact in call_facts:
             if fact.status in (FactStatus.RESOLVED, FactStatus.PROBABLE) and fact.resolved_target_id:
@@ -45,10 +48,11 @@ class Materializer:
                         "callee_name": fact.simple_name,
                         "resolver": fact.resolver_name,
                     },
+                    fact_derived=True,
                 )
                 new_relationships.append(rel)
 
-        # 2. INHERITANCE facts -> EXTENDS / IMPLEMENTS relationships
+        # 3. INHERITANCE facts -> EXTENDS / IMPLEMENTS relationships
         inheritance_facts = store.get_relationship_facts(fact_type=FactType.INHERITANCE)
         for fact in inheritance_facts:
             if fact.status in (FactStatus.RESOLVED, FactStatus.PROBABLE) and fact.resolved_target_id:
@@ -69,10 +73,11 @@ class Materializer:
                         "target_name": fact.raw_text,
                         "resolver": fact.resolver_name,
                     },
+                    fact_derived=True,
                 )
                 new_relationships.append(rel)
 
-        # 3. Deduplicate by (source_id, target_id, type)
+        # 4. Deduplicate by (source_id, target_id, type)
         seen_keys: set[tuple[str, str, RelationshipType]] = set()
         deduped_relationships: list[Relationship] = []
         dedup_count = 0
@@ -85,7 +90,7 @@ class Materializer:
             seen_keys.add(key)
             deduped_relationships.append(rel)
 
-        # 4. Store relationships
+        # 5. Store relationships
         if deduped_relationships:
             store.store_relationships(deduped_relationships)
 

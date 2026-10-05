@@ -85,7 +85,7 @@ class Indexer:
     def index(
         self,
         root: str | Path,
-        clear: bool = True,
+        clear: bool | None = None,
         mode: Literal["full", "incremental"] = "full",
         max_iterations: int = 5,
     ) -> IndexStats:
@@ -95,7 +95,10 @@ class Indexer:
         In full mode (or clear=True), wipes existing graph before indexing.
         In incremental mode, only modified/added files are analyzed.
         """
-        effective_mode: Literal["full", "incremental"] = "full" if clear else mode
+        if clear is not None:
+            effective_mode: Literal["full", "incremental"] = "full" if clear else "incremental"
+        else:
+            effective_mode = mode
 
         # 1. Forward Pass
         forward = ForwardPass()

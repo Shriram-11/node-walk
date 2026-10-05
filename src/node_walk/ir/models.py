@@ -89,6 +89,7 @@ class Relationship(BaseModel):
     source_location: SourceLocation | None = None  # call-site / import-site
     resolution: ResolutionStatus = ResolutionStatus.RESOLVED
     metadata: dict[str, Any] = Field(default_factory=dict)
+    fact_derived: bool = False
 
     model_config = {"frozen": True}
 

@@ -137,6 +137,12 @@ class SQLiteGraphStore(GraphStore):
         ).fetchone()
         return self._row_to_file(row) if row else None
 
+    def get_file_by_path(self, path: str) -> FileInfo | None:
+        row = self._conn.execute(
+            "SELECT * FROM files WHERE path = ?", (path,)
+        ).fetchone()
+        return self._row_to_file(row) if row else None
+
     def get_all_files(self) -> list[FileInfo]:
         rows = self._conn.execute("SELECT * FROM files ORDER BY path").fetchall()
         return [self._row_to_file(r) for r in rows]
@@ -146,6 +152,12 @@ class SQLiteGraphStore(GraphStore):
             "SELECT * FROM symbols WHERE id = ?", (symbol_id,)
         ).fetchone()
         return self._row_to_symbol(row) if row else None
+
+    def get_symbols_by_file(self, file_id: str) -> list[Symbol]:
+        rows = self._conn.execute(
+            "SELECT * FROM symbols WHERE file_id = ? ORDER BY start_line, id", (file_id,)
+        ).fetchall()
+        return [self._row_to_symbol(r) for r in rows]
 
     def find_symbols_by_name(self, name: str, exact: bool = False) -> list[Symbol]:
         if exact:
@@ -252,6 +264,67 @@ class SQLiteGraphStore(GraphStore):
         ).fetchone()
         return row[0] if row else 0
 
+    def delete_file_data(self, file_id: str) -> None:
+        """
+        Delete a file and all its owned data:
+          - symbols with file_id
+          - relationships whose source belongs to this file or source_file_id is this file
+          - relationship_facts with file_id
+          - the file record itself
+        """
+        with self._conn:
+            self._conn.execute(
+                """
+                DELETE FROM relationships
+                WHERE source_file_id = ?
+                   OR source_id IN (SELECT id FROM symbols WHERE file_id = ?)
+                """,
+                (file_id, file_id),
+            )
+            self._conn.execute(
+                "DELETE FROM relationship_facts WHERE file_id = ?",
+                (file_id,),
+            )
+            self._conn.execute(
+                "DELETE FROM symbols WHERE file_id = ?",
+                (file_id,),
+            )
+            self._conn.execute(
+                "DELETE FROM files WHERE id = ?",
+                (file_id,),
+            )
+
+    def reset_facts_targeting(self, symbol_ids: set[str]) -> int:
+        """
+        Find all facts in OTHER files whose resolved_target_id is in symbol_ids,
+        and reset them back to PENDING.
+        """
+        if not symbol_ids:
+            return 0
+        placeholders = ",".join("?" for _ in symbol_ids)
+        with self._conn:
+            cursor = self._conn.execute(
+                f"""
+                UPDATE relationship_facts
+                SET status = 'pending', resolved_target_id = '', resolver_name = '', diagnostics_json = '{{}}'
+                WHERE resolved_target_id IN ({placeholders})
+                """,
+                list(symbol_ids),
+            )
+            return cursor.rowcount
+
+    def delete_fact_derived_relationships(self) -> int:
+        """Delete all relationships that were materialized from facts."""
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                DELETE FROM relationships
+                WHERE fact_derived = 1
+                   OR json_extract(metadata_json, '$.fact_id') IS NOT NULL
+                """
+            )
+            return cursor.rowcount
+
     def stats(self) -> dict[str, int]:
         files = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         symbols = self._conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
@@ -334,8 +407,8 @@ class SQLiteGraphStore(GraphStore):
             """
             INSERT OR IGNORE INTO relationships
                 (id, source_id, target_id, type, source_file_id, source_line,
-                 source_col, resolution, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 source_col, resolution, metadata_json, fact_derived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 rel.id, rel.source_id, rel.target_id, rel.type.value,
@@ -344,6 +417,7 @@ class SQLiteGraphStore(GraphStore):
                 loc.col if loc else None,
                 rel.resolution.value,
                 json.dumps(rel.metadata),
+                1 if rel.fact_derived else 0,
             ),
         )
 
@@ -417,6 +491,7 @@ class SQLiteGraphStore(GraphStore):
                 line=row["source_line"],
                 col=row["source_col"] or 0,
             )
+        fact_derived = bool(row["fact_derived"]) if "fact_derived" in row.keys() else False
         return Relationship(
             id=row["id"],
             source_id=row["source_id"],
@@ -425,6 +500,7 @@ class SQLiteGraphStore(GraphStore):
             source_location=loc,
             resolution=ResolutionStatus(row["resolution"]),
             metadata=json.loads(row["metadata_json"]),
+            fact_derived=fact_derived,
         )
 
     @staticmethod

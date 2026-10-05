@@ -75,10 +75,20 @@ class GraphStore(ABC):
     def get_file(self, file_id: str) -> FileInfo | None: ...
 
     @abstractmethod
+    def get_file_by_path(self, path: str) -> FileInfo | None:
+        """Look up a file by its path."""
+        ...
+
+    @abstractmethod
     def get_all_files(self) -> list[FileInfo]: ...
 
     @abstractmethod
     def get_symbol(self, symbol_id: str) -> Symbol | None: ...
+
+    @abstractmethod
+    def get_symbols_by_file(self, file_id: str) -> list[Symbol]:
+        """Return all symbols belonging to a specific file."""
+        ...
 
     @abstractmethod
     def find_symbols_by_name(self, name: str, exact: bool = False) -> list[Symbol]: ...
@@ -122,6 +132,33 @@ class GraphStore(ABC):
     @abstractmethod
     def get_pending_fact_count(self) -> int:
         """Return the count of facts currently in PENDING status."""
+        ...
+
+    # --- Incremental Invalidation & Maintenance -----------------------------
+
+    @abstractmethod
+    def delete_file_data(self, file_id: str) -> None:
+        """
+        Delete a file and all its owned data:
+          - symbols with file_id (and cascading relationships/facts)
+          - relationships originating from this file
+          - relationship_facts from this file
+          - the file record itself
+        """
+        ...
+
+    @abstractmethod
+    def reset_facts_targeting(self, symbol_ids: set[str]) -> int:
+        """
+        Find all facts whose resolved_target_id is in symbol_ids,
+        and reset them back to PENDING.
+        Returns count of reset facts.
+        """
+        ...
+
+    @abstractmethod
+    def delete_fact_derived_relationships(self) -> int:
+        """Delete all relationships that were materialized from facts."""
         ...
 
     # --- Stats --------------------------------------------------------------
