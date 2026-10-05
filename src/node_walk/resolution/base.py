@@ -17,6 +17,37 @@ class ResolutionResult:
     diagnostics: dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
+@dataclasses.dataclass
+class RunResult:
+    """Summary of fact status changes produced during a resolver run."""
+    resolved: int = 0
+    probable: int = 0
+    ignored: int = 0
+    unresolved: int = 0
+
+    @property
+    def total_decided(self) -> int:
+        return self.resolved + self.probable + self.ignored + self.unresolved
+
+    @property
+    def progress_made(self) -> int:
+        """Facts that reached a positive terminal status."""
+        return self.resolved + self.probable
+
+    def record(self, status: FactStatus) -> None:
+        if status == FactStatus.RESOLVED:
+            self.resolved += 1
+        elif status == FactStatus.PROBABLE:
+            self.probable += 1
+        elif status == FactStatus.IGNORED:
+            self.ignored += 1
+        elif status == FactStatus.UNRESOLVED:
+            self.unresolved += 1
+
+    def __int__(self) -> int:
+        return self.progress_made
+
+
 class FactResolver(ABC):
     """
     Base class for a resolution pass.
@@ -42,38 +73,27 @@ class FactResolver(ABC):
         """
         ...
 
-    def run(self, store: GraphStore, facts: list[RelationshipFact]) -> int:
+    def run(self, store: GraphStore, facts: list[RelationshipFact]) -> RunResult:
         """
         Run the resolver against a list of facts, updating the store for any that are resolved.
         
         Returns:
-            The number of facts that were updated by this resolver.
+            A RunResult with counts of facts moved into each status.
         """
-        resolved_count = 0
+        result = RunResult()
         for fact in facts:
             if fact.status in (FactStatus.RESOLVED, FactStatus.IGNORED):
                 continue
             
-            result = self.resolve(store, fact)
-            if result is not None:
+            res = self.resolve(store, fact)
+            if res is not None:
                 store.update_relationship_fact(
                     fact.id,
-                    status=result.status,
-                    resolved_target_id=result.resolved_target_id,
+                    status=res.status,
+                    resolved_target_id=res.resolved_target_id,
                     resolver_name=self.name,
-                    diagnostics=result.diagnostics,
+                    diagnostics=res.diagnostics,
                 )
-                # Update our local copy so subsequent resolvers see the new status if we pass the same list around
-                # (Though usually we'll only pass pending facts)
-                fact_dict = fact.model_dump()
-                fact_dict.update({
-                    "status": result.status,
-                    "resolved_target_id": result.resolved_target_id,
-                    "resolver_name": self.name,
-                    "diagnostics": result.diagnostics,
-                })
-                # If facts are immutable (frozen=True in Pydantic v2), we can't easily mutate the list item inline safely without rebuilding it.
-                # Since the indexer will re-fetch or filter pending facts between passes, we don't strictly need to mutate the object here.
-                resolved_count += 1
+                result.record(res.status)
                 
-        return resolved_count
+        return result

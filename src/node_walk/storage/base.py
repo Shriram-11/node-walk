@@ -114,6 +114,16 @@ class GraphStore(ABC):
         status: FactStatus | None = None,
     ) -> list[RelationshipFact]: ...
 
+    @abstractmethod
+    def reset_unresolved_facts_to_pending(self) -> int:
+        """Reset all facts with status=UNRESOLVED back to PENDING. Returns count of reset facts."""
+        ...
+
+    @abstractmethod
+    def get_pending_fact_count(self) -> int:
+        """Return the count of facts currently in PENDING status."""
+        ...
+
     # --- Stats --------------------------------------------------------------
 
     @abstractmethod

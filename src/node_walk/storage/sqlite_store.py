@@ -235,6 +235,23 @@ class SQLiteGraphStore(GraphStore):
         rows = self._conn.execute(sql, params).fetchall()
         return [self._row_to_fact(r) for r in rows]
 
+    def reset_unresolved_facts_to_pending(self) -> int:
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                UPDATE relationship_facts
+                SET status = 'pending', resolver_name = '', diagnostics_json = '{}'
+                WHERE status = 'unresolved'
+                """
+            )
+            return cursor.rowcount
+
+    def get_pending_fact_count(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM relationship_facts WHERE status = 'pending'"
+        ).fetchone()
+        return row[0] if row else 0
+
     def stats(self) -> dict[str, int]:
         files = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         symbols = self._conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
