@@ -273,7 +273,7 @@ def index(
     console.print(
         Panel(
             "\n".join(lines),
-            title="Index complete ✓",
+            title="[green]Index complete[/green]",
             border_style="green",
         )
     )

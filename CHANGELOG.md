@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-10-06
+### Added
+- **Multi-Pass Iterative Resolution**:
+  - Implemented multi-pass backward pass resolution looping with convergence detection (automatically stopping when 0 new facts are resolved or `max_iterations` is reached).
+  - Replaced resolver boolean returns with structured `RunResult` tracking per-resolver metrics (`facts_resolved`, `facts_probable`, `facts_ignored`, `facts_pending`).
+  - Added resolver iteration statistics and granular breakdown in `IterationStats`.
+- **Incremental Indexing & Targeted Invalidation**:
+  - Introduced `FileDiffEngine` calculating SHA-256 file content hashes to categorize files into `ADDED`, `MODIFIED`, `DELETED`, and `UNCHANGED`.
+  - Added SQLite Schema v3 migration storing file content hashes in the `files` table.
+  - Implemented `CascadeInvalidator` for surgical deletion of symbols, relationship facts, and materialized edges belonging to changed or removed files while preserving unchanged graph facts.
+  - Enabled re-resolution across both newly extracted facts and previously unresolved facts in incremental mode.
+- **Pipeline Decoupling**:
+  - Refactored monolithic indexing into modular pipeline components: `ForwardPass`, `BackwardPass`, and `Materializer`.
+  - Added `IndexerStats` summarizing forward extraction, backward resolution iterations, and materialization deduplication.
+- **CLI Enhancements**:
+  - Added `--full` flag to force a clean re-index.
+  - Added `--max-passes` option to configure maximum resolution iterations (default: 5).
+  - Added `-v`/`--verbose` flag to display detailed per-resolver resolution statistics.
+  - Formatted index summary output panel with forward pass, backward pass convergence, and materialization metrics.
+
+### Fixed
+- **Windows Console Compatibility**: Fixed UTF-8 character encoding issues when outputting Rich status panels on Windows consoles using legacy code pages.
+
+---
+
 ## [0.5.0] - 2026-08-27
 ### Added
 - **Inheritance Traversal in Member Resolution**: Enabled the receiver resolution service to traverse class inheritance (checking both `EXTENDS` and `IMPLEMENTS` edges) when looking up methods, allowing inherited methods to resolve correctly.
