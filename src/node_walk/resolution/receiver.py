@@ -129,12 +129,11 @@ class ReceiverService:
 
         # 1. Check BindingIndex
         binding = self._index.get_binding(call_fact.file_id, call_fact.scope_symbol_id, root_segment)
-        print(f"DEBUG: resolve_receiver path='{receiver_text}', root='{root_segment}', caller_id={call_fact.scope_symbol_id}, binding={binding}")
         if not current_resolved_id and binding:
-                confidence = "RESOLVED" if binding.status == FactStatus.RESOLVED else "PROBABLE"
-                current_resolved_id = binding.resolved_target_id
-                diagnostics={"strategy": "binding_index", "binding_id": binding.id}
-                evidence=binding.metadata.get("binding_type", "unknown")
+            confidence = "RESOLVED" if binding.status == FactStatus.RESOLVED else "PROBABLE"
+            current_resolved_id = binding.resolved_target_id
+            diagnostics = {"strategy": "binding_index", "binding_id": binding.id}
+            evidence = binding.metadata.get("binding_type", "unknown")
 
         # Check imports for root
         if not current_resolved_id:

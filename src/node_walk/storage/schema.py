@@ -2,9 +2,9 @@
 SQLite schema for CodeGraph.
 
 Tables:
-  files         — one row per discovered source file
-  symbols       — one row per code symbol (class, function, …)
-  relationships — one row per semantic edge in the graph
+  files              — one row per discovered source file
+  symbols            — one row per code symbol (class, function, …)
+  relationships      — one row per semantic edge in the graph
   relationship_facts — one row per raw semantic observation
 
 The schema is created idempotently using CREATE TABLE IF NOT EXISTS,
@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS relationships (
     source_line     INTEGER,
     source_col      INTEGER,
     resolution      TEXT NOT NULL DEFAULT 'resolved',
-    metadata_json   TEXT NOT NULL DEFAULT '{}'
+    metadata_json   TEXT NOT NULL DEFAULT '{}',
+    fact_derived    INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS relationship_facts (
 # ---------------------------------------------------------------------------
 
 _CREATE_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_files_content_hash    ON files(content_hash);",
     "CREATE INDEX IF NOT EXISTS idx_symbols_name          ON symbols(name);",
     "CREATE INDEX IF NOT EXISTS idx_symbols_qname         ON symbols(qualified_name);",
     "CREATE INDEX IF NOT EXISTS idx_symbols_file_id       ON symbols(file_id);",
@@ -97,11 +99,14 @@ _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_rels_type             ON relationships(type);",
     "CREATE INDEX IF NOT EXISTS idx_rels_source_type      ON relationships(source_id, type);",
     "CREATE INDEX IF NOT EXISTS idx_rels_target_type      ON relationships(target_id, type);",
+    "CREATE INDEX IF NOT EXISTS idx_rels_source_file      ON relationships(source_file_id);",
+    "CREATE INDEX IF NOT EXISTS idx_rels_fact_derived     ON relationships(fact_derived);",
     "CREATE INDEX IF NOT EXISTS idx_fact_file_id          ON relationship_facts(file_id);",
     "CREATE INDEX IF NOT EXISTS idx_fact_source_symbol    ON relationship_facts(source_symbol_id);",
     "CREATE INDEX IF NOT EXISTS idx_fact_type             ON relationship_facts(fact_type);",
     "CREATE INDEX IF NOT EXISTS idx_fact_status           ON relationship_facts(status);",
     "CREATE INDEX IF NOT EXISTS idx_fact_type_status      ON relationship_facts(fact_type, status);",
+    "CREATE INDEX IF NOT EXISTS idx_fact_resolved_target  ON relationship_facts(resolved_target_id);",
 ]
 
 # ---------------------------------------------------------------------------
@@ -115,7 +120,7 @@ CREATE TABLE IF NOT EXISTS node_walk_meta (
 );
 """
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +142,17 @@ def initialize(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_RELATIONSHIP_FACTS)
     conn.execute(_CREATE_META)
 
+    # Migrations for existing databases
+    try:
+        conn.execute("ALTER TABLE relationships ADD COLUMN fact_derived INTEGER NOT NULL DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+
     for idx_sql in _CREATE_INDEXES:
         conn.execute(idx_sql)
 
     conn.execute(
-        "INSERT OR IGNORE INTO node_walk_meta(key, value) VALUES (?, ?)",
+        "INSERT INTO node_walk_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         ("schema_version", _SCHEMA_VERSION),
     )
     conn.commit()

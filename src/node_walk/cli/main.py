@@ -202,12 +202,21 @@ def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
 @app.command()
 def index(
     path: Annotated[Path, typer.Argument(help="Repository root to index.")] = Path("."),
-    clear: Annotated[bool, typer.Option("--clear/--no-clear", help="Wipe existing graph before indexing.")] = True,
+    full: Annotated[bool, typer.Option("--full", help="Force a full clean re-index.")] = False,
+    clear: Annotated[Optional[bool], typer.Option("--clear/--no-clear", help="Legacy option: wipe existing graph before indexing.")] = None,
+    max_passes: Annotated[int, typer.Option("--max-passes", help="Max resolution iterations.")] = 5,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show per-resolver stats.")] = False,
 ) -> None:
-    """Index a repository and build the semantic graph."""
+    """Index a repository and build or update the semantic graph."""
     root = path.resolve()
     db_path = root / _CG_DIR / _DB_FILENAME
+    db_exists = db_path.exists()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if clear is not None:
+        mode = "full" if clear else "incremental"
+    else:
+        mode = "full" if full or not db_exists else "incremental"
 
     store = SQLiteGraphStore(db_path)
 
@@ -215,20 +224,56 @@ def index(
         rel = Path(file_path).relative_to(root) if root in Path(file_path).parents else Path(file_path).name
         console.print(f"  [dim][{current}/{total}][/dim] {rel}", end="\r")
 
-    console.print(f"\n[bold cyan]node-walk[/bold cyan] — indexing [bold]{root}[/bold]\n")
+    console.print(f"\n[bold cyan]node-walk[/bold cyan] — indexing [bold]{root}[/bold] ({mode})\n")
 
     indexer = Indexer(store, progress_callback=progress)
-    stats = indexer.index(root, clear=clear)
+    stats = indexer.index(root, mode=mode, max_iterations=max_passes)
 
     console.print()  # newline after \r progress
+
+    lines = [
+        "[bold cyan]Forward pass[/bold cyan]",
+        f"  Files discovered:    {stats.forward.files_discovered}",
+    ]
+    if mode == "incremental":
+        lines.extend([
+            f"  Files changed:       {stats.forward.files_changed}",
+            f"  Files added:         {stats.forward.files_added}",
+            f"  Files removed:       {stats.forward.files_removed}",
+            f"  Files unchanged:     {stats.forward.files_unchanged}",
+        ])
+    lines.extend([
+        f"  Symbols extracted:   {stats.forward.symbols_extracted}  (from {stats.forward.files_analyzed} files)",
+        f"  Facts extracted:     {stats.forward.facts_extracted}",
+        "",
+        "[bold cyan]Backward pass[/bold cyan]",
+    ])
+    for stat in stats.backward.iteration_stats:
+        status_msg = f"resolved {stat.facts_resolved}, probable {stat.facts_probable}, ignored {stat.facts_ignored}"
+        if stat.iteration == stats.backward.iterations_run and stats.backward.converged and (stat.facts_resolved + stat.facts_probable == 0):
+            lines.append(f"  Iteration {stat.iteration}:  converged (0 new)")
+        else:
+            lines.append(f"  Iteration {stat.iteration}:  {status_msg}")
+        if verbose:
+            for rname, count in stat.resolver_stats.items():
+                if count > 0:
+                    lines.append(f"    - {rname}: {count}")
+
+    lines.extend([
+        f"  Total:        {stats.backward.total_resolved} resolved, {stats.backward.total_probable} probable, {stats.backward.total_ignored} ignored, {stats.backward.total_pending} pending",
+        "",
+        "[bold cyan]Materialization[/bold cyan]",
+        f"  Relationships created:  {stats.materialization.relationships_created}",
+        f"  Deduplicated:           {stats.materialization.relationships_deduplicated}",
+    ])
+
+    if stats.errors:
+        lines.append(f"\n[yellow]WARN Errors: {len(stats.errors)}[/yellow]")
+
     console.print(
         Panel(
-            f"[green]OK[/green] Files analyzed:       [bold]{stats.files_analyzed}[/bold] / {stats.files_discovered}\n"
-            f"[green]OK[/green] Symbols extracted:     [bold]{stats.symbols_extracted}[/bold]\n"
-            f"[green]OK[/green] Relationships:         [bold]{stats.relationships_extracted}[/bold]\n"
-            f"[green]OK[/green] Resolved cross-file:  [bold]{stats.relationships_resolved}[/bold]\n"
-            + (f"[yellow]WARN[/yellow] Errors: {len(stats.errors)}" if stats.errors else ""),
-            title="Index complete",
+            "\n".join(lines),
+            title="[green]Index complete[/green]",
             border_style="green",
         )
     )

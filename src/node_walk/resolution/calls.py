@@ -3,7 +3,7 @@ from typing import Any
 from node_walk.ir.enums import FactStatus, FactType, SymbolKind
 from node_walk.ir.models import RelationshipFact, Symbol
 from node_walk.storage.base import GraphStore
-from node_walk.resolution.base import FactResolver, ResolutionResult
+from node_walk.resolution.base import FactResolver, ResolutionResult, RunResult
 from node_walk.resolution.receiver import BindingIndex, ReceiverService
 
 
@@ -220,7 +220,7 @@ class CrossFileCallResolver(FactResolver):
     def name(self) -> str:
         return "CrossFileCallResolver"
 
-    def run(self, store: GraphStore, facts: list[RelationshipFact]) -> int:
+    def run(self, store: GraphStore, facts: list[RelationshipFact]) -> RunResult:
         self._index = BindingIndex(store)
         self._service = ReceiverService(store, self._index)
         return super().run(store, facts)
