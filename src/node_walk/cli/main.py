@@ -12,13 +12,12 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
 import typer
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 from rich import box
-from rich.text import Text
+from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 
+from node_walk.cli import output
 from node_walk.indexer import Indexer
 from node_walk.ir.enums import RelationshipType, SymbolKind
 from node_walk.query.engine import QueryEngine, SymbolMatch, WalkResult, TraceResult
@@ -36,8 +35,18 @@ app = typer.Typer(
     rich_markup_mode="rich",
     no_args_is_help=True,
 )
-console = Console()
-err_console = Console(stderr=True)
+
+
+@app.callback()
+def main_callback(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit machine-readable JSON to stdout."),
+    ] = False,
+) -> None:
+    """Global options for node-walk."""
+    output.init(json_mode=json_output)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,20 +69,30 @@ def _find_db(start: Path | None = None) -> Path | None:
         current = parent
 
 
-def _get_store(repo_path: Path | None = None) -> SQLiteGraphStore:
+def _get_store(repo_path: Path | None = None, command_name: str = "node-walk") -> SQLiteGraphStore:
     """Open the graph store, or exit with a helpful error."""
     db = _find_db(repo_path)
     if db is None:
-        err_console.print(
-            "[red]No .node_walk/graph.db found.[/red] "
-            "Run [bold]node-walk index <path>[/bold] first."
+        if output.is_json():
+            output.emit_error(
+                command_name,
+                "NO_INDEX",
+                "No .node_walk/graph.db found. Run 'node-walk index <path>' first.",
+            )
+        output.print_rich_error(
+            "No .node_walk/graph.db found.",
+            "Run 'node-walk index <path>' first to build the code graph.",
+            hint="Example: node-walk index .",
         )
         raise typer.Exit(1)
+    # Set repo root on output context if not set yet
+    if output._ctx.repo_root is None:
+        output._ctx.repo_root = db.parent.parent
     return SQLiteGraphStore(db)
 
 
-def _get_engine(repo_path: Path | None = None) -> QueryEngine:
-    return QueryEngine(_get_store(repo_path))
+def _get_engine(repo_path: Path | None = None, command_name: str = "node-walk") -> QueryEngine:
+    return QueryEngine(_get_store(repo_path, command_name=command_name))
 
 
 def _print_symbols_table(
@@ -81,6 +100,7 @@ def _print_symbols_table(
     title: str = "Results",
     store: "SQLiteGraphStore | None" = None,
 ) -> None:
+    console = output.get_console()
     if not matches:
         console.print("[dim]No symbols found.[/dim]")
         return
@@ -114,6 +134,7 @@ def _print_symbols_table(
 
 
 def _print_walk_results(results: list[WalkResult], title: str) -> None:
+    console = output.get_console()
     if not results:
         console.print("[dim]No results.[/dim]")
         return
@@ -132,53 +153,71 @@ def _print_walk_results(results: list[WalkResult], title: str) -> None:
     console.print(table)
 
 
-def _output_graph(result: TraceResult, fmt: str, title: str, output: Path | None = None) -> None:
+def _output_graph(result: TraceResult, fmt: str, title: str, output_path: Path | None = None) -> None:
+    console = output.get_console()
     fmt_lower = fmt.lower().strip()
     if fmt_lower == "tree":
         tree_text = format_ascii_tree(result)
-        if output:
-            output.write_text(tree_text, encoding="utf-8")
-            console.print(f"[green]Saved tree to[/green] {output}")
+        if output_path:
+            output_path.write_text(tree_text, encoding="utf-8")
+            console.print(f"[green]Saved tree to[/green] {output_path}")
         else:
             console.print(Panel(tree_text, title=title, border_style="cyan"))
     elif fmt_lower == "dot":
         dot_text = format_dot(result)
-        if output:
-            output.write_text(dot_text, encoding="utf-8")
-            console.print(f"[green]Saved DOT graph to[/green] {output}")
+        if output_path:
+            output_path.write_text(dot_text, encoding="utf-8")
+            console.print(f"[green]Saved DOT graph to[/green] {output_path}")
         else:
             print(dot_text)
     elif fmt_lower == "mermaid":
         mermaid_text = format_mermaid(result)
-        if output:
-            output.write_text(mermaid_text, encoding="utf-8")
-            console.print(f"[green]Saved Mermaid diagram to[/green] {output}")
+        if output_path:
+            output_path.write_text(mermaid_text, encoding="utf-8")
+            console.print(f"[green]Saved Mermaid diagram to[/green] {output_path}")
         else:
             print(mermaid_text)
     else:  # default table
         _print_walk_results(result.nodes, title=title)
 
 
-def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
+def _resolve_symbol(
+    engine: QueryEngine,
+    query: str,
+    command_name: str = "node-walk",
+) -> str | None:
     """
     Resolve a user-provided symbol name/qname to a symbol_id.
-    If unambiguous (exact match or clear top candidate), returns it directly.
-    If multiple close matches, prints a picker and prompts the user.
-    Returns the chosen symbol_id, or None on failure.
+    In JSON mode, never prompts — auto-picks top match or emits error.
     """
+    console = output.get_console()
     matches = engine.find_symbol(query)
     if not matches:
-        console.print(f"[red]No symbol found matching:[/red] {query!r}")
+        if output.is_json():
+            output.emit_error(
+                command_name,
+                "SYMBOL_NOT_FOUND",
+                f"No symbol found matching: {query!r}",
+            )
+        output.print_rich_error(
+            "Symbol not found",
+            f"No symbol matching [yellow]{query!r}[/yellow] exists in the graph.",
+            hint=f"Try running: node-walk find {query}",
+        )
         return None
 
     if len(matches) == 1:
         return matches[0].symbol.id
 
-    # If the top match is high confidence and clearly separated from the rest, resolve directly
+    # If top match is high confidence and clearly separated, resolve directly
     if matches[0].score >= 0.85 and (matches[0].score - matches[1].score >= 0.10):
         return matches[0].symbol.id
 
-    # Multiple matches — let the user pick
+    # In JSON mode: auto-select top candidate without interactive prompting
+    if output.is_json():
+        return matches[0].symbol.id
+
+    # Multiple matches — let the human user pick
     console.print(f"\n[bold]Multiple matches for[/bold] [yellow]{query!r}[/yellow]:\n")
     for i, m in enumerate(matches[:10], 1):
         sym = m.symbol
@@ -190,7 +229,7 @@ def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
         idx = int(choice) - 1
         return matches[idx].symbol.id
     except (ValueError, IndexError):
-        console.print("[red]Invalid choice.[/red]")
+        output.print_rich_error("Invalid choice", "The selected number is outside valid range.")
         return None
 
 
@@ -200,6 +239,7 @@ def _resolve_symbol(engine: QueryEngine, query: str) -> str | None:
 
 
 @app.command()
+@output.cli_error_guard("index")
 def index(
     path: Annotated[Path, typer.Argument(help="Repository root to index.")] = Path("."),
     full: Annotated[bool, typer.Option("--full", help="Force a full clean re-index.")] = False,
@@ -219,15 +259,61 @@ def index(
         mode = "full" if full or not db_exists else "incremental"
 
     store = SQLiteGraphStore(db_path)
+    output._ctx.repo_root = root
+
+    console = output.get_console()
 
     def progress(file_path: str, current: int, total: int) -> None:
-        rel = Path(file_path).relative_to(root) if root in Path(file_path).parents else Path(file_path).name
-        console.print(f"  [dim][{current}/{total}][/dim] {rel}", end="\r")
+        if not output.is_json():
+            rel = Path(file_path).relative_to(root) if root in Path(file_path).parents else Path(file_path).name
+            console.print(f"  [dim][{current}/{total}][/dim] {rel}", end="\r")
 
-    console.print(f"\n[bold cyan]node-walk[/bold cyan] — indexing [bold]{root}[/bold] ({mode})\n")
+    if not output.is_json():
+        console.print(f"\n[bold cyan]node-walk[/bold cyan] — indexing [bold]{root}[/bold] ({mode})\n")
 
     indexer = Indexer(store, progress_callback=progress)
     stats = indexer.index(root, mode=mode, max_iterations=max_passes)
+
+    if output.is_json():
+        iteration_stats = [
+            {
+                "iteration": s.iteration,
+                "facts_resolved": s.facts_resolved,
+                "facts_probable": s.facts_probable,
+                "facts_ignored": s.facts_ignored,
+                "resolver_stats": s.resolver_stats,
+            }
+            for s in stats.backward.iteration_stats
+        ]
+        data = {
+            "mode": mode,
+            "forward": {
+                "files_discovered": stats.forward.files_discovered,
+                "files_changed": stats.forward.files_changed,
+                "files_added": stats.forward.files_added,
+                "files_removed": stats.forward.files_removed,
+                "files_unchanged": stats.forward.files_unchanged,
+                "files_analyzed": stats.forward.files_analyzed,
+                "symbols_extracted": stats.forward.symbols_extracted,
+                "facts_extracted": stats.forward.facts_extracted,
+            },
+            "backward": {
+                "iterations_run": stats.backward.iterations_run,
+                "converged": stats.backward.converged,
+                "total_resolved": stats.backward.total_resolved,
+                "total_probable": stats.backward.total_probable,
+                "total_ignored": stats.backward.total_ignored,
+                "total_pending": stats.backward.total_pending,
+                "iteration_stats": iteration_stats,
+            },
+            "materialization": {
+                "relationships_created": stats.materialization.relationships_created,
+                "relationships_deduplicated": stats.materialization.relationships_deduplicated,
+            },
+            "errors": stats.errors,
+        }
+        output.emit("index", data)
+        return
 
     console.print()  # newline after \r progress
 
@@ -285,36 +371,65 @@ def index(
 
 
 @app.command()
+@output.cli_error_guard("find")
 def find(
     query: Annotated[str, typer.Argument(help="Symbol name or qualified name to search for.")],
     limit: Annotated[int, typer.Option("--limit", "-n", help="Max results.")] = 20,
 ) -> None:
     """Search for symbols by name or qualified name."""
-    store = _get_store()
+    store = _get_store(command_name="find")
     engine = QueryEngine(store)
     matches = engine.find_symbol(query, limit=limit)
+
+    if output.is_json():
+        results = []
+        for m in matches:
+            file_info = store.get_file(m.symbol.file_id)
+            file_path = file_info.path if file_info else ""
+            results.append({
+                "symbol": output.symbol_to_dict(m.symbol, file_path),
+                "score": m.score,
+            })
+        output.emit("find", {
+            "query": query,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
     _print_symbols_table(matches, title=f"Results for {query!r}", store=store)
 
 
 @app.command()
+@output.cli_error_guard("definition")
 def definition(
     symbol: Annotated[str, typer.Argument(help="Symbol name or qualified name.")],
 ) -> None:
     """Show the definition (file, lines, signature) of a symbol."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="definition")
+    sym_id = _resolve_symbol(engine, symbol, command_name="definition")
     if not sym_id:
         raise typer.Exit(1)
 
     sym = engine.get_definition(sym_id)
     if not sym:
-        console.print("[red]Symbol not found.[/red]")
+        if output.is_json():
+            output.emit_error("definition", "SYMBOL_NOT_FOUND", "Symbol not found in graph.")
+        output.print_rich_error("Symbol not found", "Definition could not be retrieved from graph.")
         raise typer.Exit(1)
 
-    store = _get_store()
+    store = _get_store(command_name="definition")
     file_info = store.get_file(sym.file_id)
     file_path = file_info.path if file_info else "?"
 
+    if output.is_json():
+        output.emit("definition", {
+            "symbol": output.symbol_to_dict(sym, file_path),
+            "parent_id": sym.parent_id,
+        })
+        return
+
+    console = output.get_console()
     console.print(
         Panel(
             f"[bold]{sym.qualified_name}[/bold]\n\n"
@@ -332,16 +447,35 @@ def definition(
 
 
 @app.command()
+@output.cli_error_guard("callers")
 def callers(
     symbol: Annotated[str, typer.Argument(help="Symbol name or qualified name.")],
 ) -> None:
     """Find all symbols that call the given symbol."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="callers")
+    sym_id = _resolve_symbol(engine, symbol, command_name="callers")
     if not sym_id:
         raise typer.Exit(1)
 
     pairs = engine.get_callers(sym_id)
+    store = _get_store(command_name="callers")
+
+    if output.is_json():
+        results = []
+        for sym, rel in pairs:
+            file_info = store.get_file(sym.file_id)
+            results.append({
+                "symbol": output.symbol_to_dict(sym, file_info.path if file_info else ""),
+                "relationship": output.relationship_to_dict(rel),
+            })
+        output.emit("callers", {
+            "target": symbol,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
+    console = output.get_console()
     if not pairs:
         console.print("[dim]No callers found.[/dim]")
         return
@@ -365,16 +499,35 @@ def callers(
 
 
 @app.command()
+@output.cli_error_guard("callees")
 def callees(
     symbol: Annotated[str, typer.Argument(help="Symbol name or qualified name.")],
 ) -> None:
     """Find all symbols called by the given symbol."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="callees")
+    sym_id = _resolve_symbol(engine, symbol, command_name="callees")
     if not sym_id:
         raise typer.Exit(1)
 
     pairs = engine.get_callees(sym_id)
+    store = _get_store(command_name="callees")
+
+    if output.is_json():
+        results = []
+        for sym, rel in pairs:
+            file_info = store.get_file(sym.file_id)
+            results.append({
+                "symbol": output.symbol_to_dict(sym, file_info.path if file_info else ""),
+                "relationship": output.relationship_to_dict(rel),
+            })
+        output.emit("callees", {
+            "target": symbol,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
+    console = output.get_console()
     if not pairs:
         console.print("[dim]No callees found.[/dim]")
         return
@@ -398,16 +551,35 @@ def callees(
 
 
 @app.command()
+@output.cli_error_guard("refs")
 def refs(
     symbol: Annotated[str, typer.Argument(help="Symbol name or qualified name.")],
 ) -> None:
     """Find all references to the given symbol."""
-    store = _get_store()
+    store = _get_store(command_name="refs")
     engine = QueryEngine(store)
-    sym_id = _resolve_symbol(engine, symbol)
+    sym_id = _resolve_symbol(engine, symbol, command_name="refs")
     if not sym_id:
         raise typer.Exit(1)
+
     pairs = engine.get_references(sym_id)
+
+    if output.is_json():
+        results = []
+        for s, _ in pairs:
+            file_info = store.get_file(s.file_id)
+            results.append({
+                "symbol": output.symbol_to_dict(s, file_info.path if file_info else ""),
+                "score": 1.0,
+            })
+        output.emit("refs", {
+            "target": symbol,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
+    console = output.get_console()
     if not pairs:
         console.print("[dim]No references found.[/dim]")
         return
@@ -416,16 +588,35 @@ def refs(
 
 
 @app.command()
+@output.cli_error_guard("implementations")
 def implementations(
     symbol: Annotated[str, typer.Argument(help="Class/interface name.")],
 ) -> None:
     """Find implementations or subclasses of the given class/interface."""
-    store = _get_store()
+    store = _get_store(command_name="implementations")
     engine = QueryEngine(store)
-    sym_id = _resolve_symbol(engine, symbol)
+    sym_id = _resolve_symbol(engine, symbol, command_name="implementations")
     if not sym_id:
         raise typer.Exit(1)
+
     syms = engine.get_implementations(sym_id)
+
+    if output.is_json():
+        results = []
+        for s in syms:
+            file_info = store.get_file(s.file_id)
+            results.append({
+                "symbol": output.symbol_to_dict(s, file_info.path if file_info else ""),
+                "score": 1.0,
+            })
+        output.emit("implementations", {
+            "target": symbol,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
+    console = output.get_console()
     if not syms:
         console.print("[dim]No implementations found.[/dim]")
         return
@@ -434,15 +625,34 @@ def implementations(
 
 
 @app.command()
+@output.cli_error_guard("imports")
 def imports(
     symbol: Annotated[str, typer.Argument(help="Symbol or file name.")],
 ) -> None:
     """Show what a symbol/module imports."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="imports")
+    sym_id = _resolve_symbol(engine, symbol, command_name="imports")
     if not sym_id:
         raise typer.Exit(1)
+
     rels = engine.get_imports(sym_id)
+
+    if output.is_json():
+        results = []
+        for rel in rels:
+            target = rel.metadata.get("target_name", rel.target_id or "?")
+            results.append({
+                "target_name": target,
+                "relationship": output.relationship_to_dict(rel),
+            })
+        output.emit("imports", {
+            "symbol": symbol,
+            "count": len(results),
+            "results": results,
+        })
+        return
+
+    console = output.get_console()
     if not rels:
         console.print("[dim]No imports found.[/dim]")
         return
@@ -461,58 +671,142 @@ def imports(
 
 
 @app.command()
+@output.cli_error_guard("trace")
 def trace(
     symbol: Annotated[str, typer.Argument(help="Starting symbol name.")],
     depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 5,
     fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: table, tree, dot, mermaid.")] = "table",
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
+    output_path: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
 ) -> None:
     """Trace outgoing CALLS and IMPORTS from a symbol (shows what it depends on)."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="trace")
+    store = _get_store(command_name="trace")
+    sym_id = _resolve_symbol(engine, symbol, command_name="trace")
     if not sym_id:
         raise typer.Exit(1)
 
     result = engine.trace_graph(sym_id, depth=depth)
+
+    if output.is_json():
+        if not result or not result.nodes:
+            output.emit("trace", {
+                "root": None,
+                "direction": "out",
+                "depth": depth,
+                "nodes": [],
+                "edges": [],
+            })
+            return
+        root_file = store.get_file(result.root.file_id)
+        nodes = []
+        for n in result.nodes:
+            f = store.get_file(n.symbol.file_id)
+            nodes.append({
+                "symbol": output.symbol_to_dict(n.symbol, f.path if f else ""),
+                "depth": n.depth,
+                "via": n.via_relationship.value if n.via_relationship else None,
+            })
+        edges = [
+            {
+                "source": e.source.id,
+                "target": e.target.id,
+                "type": e.relationship.value,
+                "depth": e.depth,
+            }
+            for e in result.edges
+        ]
+        output.emit("trace", {
+            "root": output.symbol_to_dict(result.root, root_file.path if root_file else ""),
+            "direction": "out",
+            "depth": depth,
+            "nodes": nodes,
+            "edges": edges,
+        })
+        return
+
+    console = output.get_console()
     if not result or not result.nodes:
         console.print("[dim]No outgoing relationships found.[/dim]")
         return
 
-    _output_graph(result, fmt, title=f"Trace from {symbol!r} (depth={depth})", output=output)
+    _output_graph(result, fmt, title=f"Trace from {symbol!r} (depth={depth})", output_path=output_path)
 
 
 @app.command(name="blast-radius")
+@output.cli_error_guard("blast-radius")
 def blast_radius(
     symbol: Annotated[str, typer.Argument(help="Symbol name to assess impact for.")],
     depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 3,
     fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: table, tree, dot, mermaid.")] = "table",
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
+    output_path: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
 ) -> None:
     """Find everything that could be affected if this symbol changes."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="blast-radius")
+    store = _get_store(command_name="blast-radius")
+    sym_id = _resolve_symbol(engine, symbol, command_name="blast-radius")
     if not sym_id:
         raise typer.Exit(1)
 
     result = engine.blast_radius_graph(sym_id, depth=depth)
+
+    if output.is_json():
+        if not result or not result.nodes:
+            output.emit("blast-radius", {
+                "root": None,
+                "direction": "in",
+                "depth": depth,
+                "nodes": [],
+                "edges": [],
+            })
+            return
+        root_file = store.get_file(result.root.file_id)
+        nodes = []
+        for n in result.nodes:
+            f = store.get_file(n.symbol.file_id)
+            nodes.append({
+                "symbol": output.symbol_to_dict(n.symbol, f.path if f else ""),
+                "depth": n.depth,
+                "via": n.via_relationship.value if n.via_relationship else None,
+            })
+        edges = [
+            {
+                "source": e.source.id,
+                "target": e.target.id,
+                "type": e.relationship.value,
+                "depth": e.depth,
+            }
+            for e in result.edges
+        ]
+        output.emit("blast-radius", {
+            "root": output.symbol_to_dict(result.root, root_file.path if root_file else ""),
+            "direction": "in",
+            "depth": depth,
+            "nodes": nodes,
+            "edges": edges,
+        })
+        return
+
+    console = output.get_console()
     if not result or not result.nodes:
         console.print("[dim]No dependent relationships found.[/dim]")
         return
 
-    _output_graph(result, fmt, title=f"Blast radius of {symbol!r} (depth={depth})", output=output)
+    _output_graph(result, fmt, title=f"Blast radius of {symbol!r} (depth={depth})", output_path=output_path)
 
 
 @app.command()
+@output.cli_error_guard("graph")
 def graph(
     symbol: Annotated[str, typer.Argument(help="Root symbol name or qualified name.")],
     depth: Annotated[int, typer.Option("--depth", "-d", help="Max traversal depth.")] = 3,
     direction: Annotated[str, typer.Option("--direction", help="Traversal direction: out, in, both.")] = "out",
     fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: tree, dot, mermaid, table.")] = "tree",
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
+    output_path: Annotated[Optional[Path], typer.Option("--output", "-o", help="Save output to file.")] = None,
 ) -> None:
     """Visualize dependencies around a symbol as an ASCII tree, DOT graph, or Mermaid diagram."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="graph")
+    store = _get_store(command_name="graph")
+    sym_id = _resolve_symbol(engine, symbol, command_name="graph")
     if not sym_id:
         raise typer.Exit(1)
 
@@ -521,28 +815,91 @@ def graph(
         dir_val = "out"
 
     result = engine.walk_graph(sym_id, direction=dir_val, depth=depth)
+
+    if output.is_json():
+        if not result or not result.nodes:
+            output.emit("graph", {
+                "root": None,
+                "direction": dir_val,
+                "depth": depth,
+                "nodes": [],
+                "edges": [],
+            })
+            return
+        root_file = store.get_file(result.root.file_id)
+        nodes = []
+        for n in result.nodes:
+            f = store.get_file(n.symbol.file_id)
+            nodes.append({
+                "symbol": output.symbol_to_dict(n.symbol, f.path if f else ""),
+                "depth": n.depth,
+                "via": n.via_relationship.value if n.via_relationship else None,
+            })
+        edges = [
+            {
+                "source": e.source.id,
+                "target": e.target.id,
+                "type": e.relationship.value,
+                "depth": e.depth,
+            }
+            for e in result.edges
+        ]
+        output.emit("graph", {
+            "root": output.symbol_to_dict(result.root, root_file.path if root_file else ""),
+            "direction": dir_val,
+            "depth": depth,
+            "nodes": nodes,
+            "edges": edges,
+        })
+        return
+
+    console = output.get_console()
     if not result or not result.nodes:
         console.print("[dim]No graph connections found for this symbol.[/dim]")
         return
 
-    _output_graph(result, fmt, title=f"Graph: {symbol!r} ({direction}, depth={depth})", output=output)
+    _output_graph(result, fmt, title=f"Graph: {symbol!r} ({direction}, depth={depth})", output_path=output_path)
 
 
 @app.command()
+@output.cli_error_guard("source")
 def source(
     symbol: Annotated[str, typer.Argument(help="Symbol name or qualified name.")],
 ) -> None:
     """Display the exact source lines for a symbol."""
-    engine = _get_engine()
-    sym_id = _resolve_symbol(engine, symbol)
+    engine = _get_engine(command_name="source")
+    store = _get_store(command_name="source")
+    sym_id = _resolve_symbol(engine, symbol, command_name="source")
     if not sym_id:
         raise typer.Exit(1)
+
+    sym = engine.get_definition(sym_id)
     src = engine.get_source(sym_id)
     if not src:
-        console.print("[red]Could not retrieve source.[/red]")
+        if output.is_json():
+            output.emit_error("source", "SOURCE_UNAVAILABLE", "Could not retrieve source.")
+        output.print_rich_error("Could not retrieve source", f"Source lines unavailable for {symbol!r}.")
         raise typer.Exit(1)
 
     code = "\n".join(src.lines)
+
+    if output.is_json():
+        rel_file = src.file_path
+        if output._ctx.repo_root:
+            try:
+                rel_file = str(Path(src.file_path).relative_to(output._ctx.repo_root))
+            except ValueError:
+                pass
+        output.emit("source", {
+            "symbol": output.symbol_to_dict(sym, src.file_path) if sym else None,
+            "file": rel_file,
+            "start_line": src.start_line,
+            "end_line": src.end_line,
+            "source": code,
+        })
+        return
+
+    console = output.get_console()
     syntax = Syntax(
         code,
         "python",
@@ -560,11 +917,35 @@ def source(
 
 
 @app.command()
+@output.cli_error_guard("stats")
 def stats() -> None:
     """Show graph statistics: file count, symbol counts by kind, relationship counts."""
-    engine = _get_engine()
+    engine = _get_engine(command_name="stats")
     data = engine.stats()
 
+    if output.is_json():
+        symbols_by_kind = {
+            k.replace("symbols_", "").upper(): v
+            for k, v in data.items()
+            if k.startswith("symbols_") and k != "symbols"
+        }
+        relationships_by_type = {
+            k.replace("rel_", "").upper(): v
+            for k, v in data.items()
+            if k.startswith("rel_")
+        }
+        json_data = {
+            "files": data.get("files", 0),
+            "symbols": data.get("symbols", 0),
+            "relationships": data.get("relationships", 0),
+            "unresolved_relationships": data.get("unresolved_relationships", 0),
+            "symbols_by_kind": symbols_by_kind,
+            "relationships_by_type": relationships_by_type,
+        }
+        output.emit("stats", json_data)
+        return
+
+    console = output.get_console()
     table = Table(title="Graph statistics", box=box.ROUNDED, header_style="bold cyan")
     table.add_column("Metric", style="bold white")
     table.add_column("Count", style="cyan", justify="right")
@@ -595,16 +976,16 @@ def stats() -> None:
 
 
 @app.command(name="export")
+@output.cli_error_guard("export")
 def export_graph(
-    output: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file (default: stdout).")] = None,
+    output_path: Annotated[Optional[Path], typer.Option("--output", "-o", help="Output file (default: stdout).")] = None,
     fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: json")] = "json",
 ) -> None:
     """Export the entire graph as JSON."""
-    store = _get_store()
+    store = _get_store(command_name="export")
     files = [f.model_dump() for f in store.get_all_files()]
     symbols = [s.model_dump() for s in store.get_all_symbols()]
 
-    # Get all relationships
     all_rels = []
     for sym in store.get_all_symbols():
         rels = store.get_relationships_from(sym.id)
@@ -619,12 +1000,21 @@ def export_graph(
             seen.add(r["id"])
             unique_rels.append(r)
 
-    data = {"files": files, "symbols": symbols, "relationships": unique_rels}
-    text = json.dumps(data, indent=2, default=str)
+    raw_payload = {"files": files, "symbols": symbols, "relationships": unique_rels}
 
-    if output:
-        output.write_text(text, encoding="utf-8")
-        console.print(f"[green]Exported to[/green] {output}")
+    if output.is_json():
+        if output_path:
+            output_path.write_text(json.dumps(raw_payload, indent=2, default=str), encoding="utf-8")
+            output.emit("export", {"output_file": str(output_path), "files_count": len(files), "symbols_count": len(symbols), "relationships_count": len(unique_rels)})
+        else:
+            output.emit("export", raw_payload)
+        return
+
+    text = json.dumps(raw_payload, indent=2, default=str)
+    console = output.get_console()
+    if output_path:
+        output_path.write_text(text, encoding="utf-8")
+        console.print(f"[green]Exported to[/green] {output_path}")
     else:
         print(text)
 
@@ -632,6 +1022,7 @@ def export_graph(
 @app.command(name="help")
 def show_help() -> None:
     """Show this help message and exit."""
+    console = output.get_console()
     console.print(
         Panel(
             "[bold white]node-walk[/bold white] - Local Semantic Code Intelligence for Python\n"
@@ -682,8 +1073,8 @@ def show_help() -> None:
     console.print("\n[dim]To see options for any command, run: [bold]node-walk <command> --help[/bold][/dim]")
 
 
-
 @app.command()
+@output.cli_error_guard("serve")
 def serve(
     port: Annotated[int, typer.Option("--port", "-p", help="Port to listen on.")] = 7777,
     host: Annotated[str, typer.Option("--host", help="Host to bind to.")] = "localhost",
@@ -692,13 +1083,27 @@ def serve(
     """Launch the interactive graph explorer in your browser."""
     db = _find_db()
     if db is None:
-        err_console.print(
-            "[red]No .node_walk/graph.db found.[/red] "
-            "Run [bold]node-walk index <path>[/bold] first."
+        if output.is_json():
+            output.emit_error(
+                "serve",
+                "NO_INDEX",
+                "No .node_walk/graph.db found. Run 'node-walk index <path>' first.",
+            )
+        output.print_rich_error(
+            "No .node_walk/graph.db found.",
+            "Run 'node-walk index <path>' first.",
         )
         raise typer.Exit(1)
 
     url = f"http://{host}:{port}"
+    if output.is_json():
+        output.emit("serve", {"url": url, "host": host, "port": port, "db": str(db)})
+        # Start server without blocking or with requested parameters
+        from node_walk.web.server import start_server
+        start_server(db, host=host, port=port, open_browser=not no_open, block=True)
+        return
+
+    console = output.get_console()
     console.print(
         Panel(
             f"[bold cyan]Graph explorer[/bold cyan] starting at [bold]{url}[/bold]\n"
@@ -718,7 +1123,5 @@ def serve(
 # Entry point
 # ---------------------------------------------------------------------------
 
-
 if __name__ == "__main__":
     app()
-
