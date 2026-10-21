@@ -115,7 +115,45 @@ node-walk stats
 node-walk export --output graph.json
 ```
 
+### 7. AI Agents & Machine-Readable JSON Output (`--json`)
+For autonomous AI coding agents or scripts, use the global `--json` flag to receive structured JSON output on `stdout` without Rich markup or interactive prompts:
+
+```bash
+# Search symbols as JSON
+node-walk --json find UserService
+
+# Inspect callers as structured data
+node-walk --json callers UserService.create_user
+
+# Get database statistics in JSON format
+node-walk --json stats
+```
+
+All commands output a consistent envelope format:
+```json
+{
+  "ok": true,
+  "command": "find",
+  "data": { ... },
+  "error": null
+}
+```
+
+On errors or missing symbols, a standardized error code is returned:
+```json
+{
+  "ok": false,
+  "command": "find",
+  "data": null,
+  "error": {
+    "code": "SYMBOL_NOT_FOUND",
+    "message": "No symbol found matching: 'Unknown'"
+  }
+}
+```
+
 ---
+
 
 ## Architecture
 
