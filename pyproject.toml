@@ -55,6 +55,7 @@ packages = ["src/node_walk"]
 "src/node_walk/web/index.html" = "node_walk/web/index.html"
 "src/node_walk/web/style.css"  = "node_walk/web/style.css"
 "src/node_walk/web/app.js"     = "node_walk/web/app.js"
+"src/node_walk/web/vendor/cytoscape.min.js" = "node_walk/web/vendor/cytoscape.min.js"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

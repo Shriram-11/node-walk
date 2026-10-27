@@ -8,18 +8,9 @@
       name="description"
       content="Interactive browser-based code graph explorer for node-walk — visualise symbols and relationships in your codebase."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="/style.css" />
-    <!-- Cytoscape.js from CDN — no bundler needed -->
-    <script
-      src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"
-      crossorigin="anonymous"
-    ></script>
+    <!-- Cytoscape.js — vendored locally, no internet required -->
+    <script src="/vendor/cytoscape.min.js"></script>
   </head>
   <body>
     <!-- ================================================================

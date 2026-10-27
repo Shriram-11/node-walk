@@ -89,6 +89,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
                 self._serve_static("style.css")
             elif path == "/app.js":
                 self._serve_static("app.js")
+            elif path.startswith("/vendor/"):
+                # Serve vendored JS libraries (e.g. cytoscape.min.js)
+                vendor_file = path.removeprefix("/vendor/")
+                self._serve_static(f"vendor/{vendor_file}")
             elif path == "/api/graph":
                 self._handle_graph(qs)
             elif path == "/api/stats":
@@ -111,7 +115,11 @@ class _GraphHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _serve_static(self, filename: str) -> None:
-        fpath = _WEB_DIR / filename
+        fpath = (_WEB_DIR / filename).resolve()
+        # Prevent path traversal outside the web directory
+        if not str(fpath).startswith(str(_WEB_DIR.resolve())):
+            self._send_json({"error": "Forbidden"}, status=403)
+            return
         if not fpath.exists():
             self._send_json({"error": f"{filename} not found"}, status=404)
             return

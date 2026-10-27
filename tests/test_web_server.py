@@ -226,6 +226,22 @@ class TestStaticFiles:
             ct = resp.headers.get("Content-Type", "")
             assert "javascript" in ct or "application" in ct
 
+    def test_vendor_cytoscape(self, live_server):
+        import urllib.request
+        with urllib.request.urlopen(live_server + "/vendor/cytoscape.min.js", timeout=5) as resp:
+            assert resp.status == 200
+            ct = resp.headers.get("Content-Type", "")
+            assert "javascript" in ct or "application" in ct
+            body = resp.read()
+            assert len(body) > 10000
+
+    def test_vendor_path_traversal(self, live_server):
+        import urllib.request
+        import urllib.error
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(live_server + "/vendor/../../server.py", timeout=5)
+        assert exc_info.value.code in (403, 404)
+
 
 # ---------------------------------------------------------------------------
 # Smoke test: full round-trip
